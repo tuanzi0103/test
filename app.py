@@ -16,12 +16,6 @@ from services.ingestion import ingest_from_drive_all
 import platform
 import numpy as np
 
-st.sidebar.write("🔧 环境信息:")
-st.sidebar.write(f"- Python: {sys.version}")
-st.sidebar.write(f"- Pandas: {pd.__version__}")
-st.sidebar.write(f"- Numpy: {np.__version__}")
-st.sidebar.write(f"- 系统: {platform.system()} {platform.release()}")
-
 st.set_page_config(
     page_title="Vie Manly Analytics",
     layout="wide",
