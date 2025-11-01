@@ -1,0 +1,12 @@
+streamlit
+pymongo[srv]>=4.6
+pandas
+altair
+plotly
+openpyxl
+xlrd
+numpy
+scikit-learn
+statsmodels
+faker
+pydrive2
