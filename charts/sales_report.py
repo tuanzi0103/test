@@ -85,10 +85,10 @@ def _safe_sum(df, col):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def preload_all_data():
-    """预加载所有需要的数据 - 与high_level.py相同的函数"""
+    """预加载所有需要的数据"""
     db = get_db()
 
-    # 加载交易数据（包含日期信息）
+    # 加载交易数据 - 修复：确保包含所有分类，包括空分类
     daily_sql = """
     WITH transaction_totals AS (
         SELECT 
@@ -121,7 +121,11 @@ def preload_all_data():
     WITH category_transactions AS (
         SELECT 
             date(Datetime) AS date,
-            Category,
+            -- 修复：处理空分类，确保所有数据都被包含
+            CASE 
+                WHEN Category IS NULL OR TRIM(Category) = '' THEN 'None'
+                ELSE Category 
+            END AS Category,
             [Transaction ID] AS txn_id,
             SUM([Net Sales]) AS cat_net_sales,
             SUM(COALESCE(CAST(REPLACE(REPLACE([Tax], '$', ''), ',', '') AS REAL), 0)) AS cat_tax,
@@ -162,31 +166,20 @@ def preload_all_data():
     ORDER BY date, Category;
     """
 
-    # 加载原始交易数据用于获取商品项（包含日期信息）
-    item_sql = """
-    SELECT 
-        date(Datetime) as date,
-        Category,
-        Item,
-        [Net Sales],
-        Tax,
-        Qty,
-        [Gross Sales]
-    FROM transactions
-    WHERE Category IS NOT NULL AND Item IS NOT NULL
-    """
-
     daily = pd.read_sql(daily_sql, db)
     category = pd.read_sql(category_sql, db)
-    items_df = pd.read_sql(item_sql, db)
 
     if not daily.empty:
         daily["date"] = pd.to_datetime(daily["date"])
         daily = daily.sort_values("date")
 
-        # 移除缺失数据的日期 (8.18, 8.19, 8.20) - 所有数据都过滤
+        # 移除缺失数据的日期 (8.18, 8.19, 8.20)
         missing_dates = ['2025-08-18', '2025-08-19', '2025-08-20']
         daily = daily[~daily["date"].isin(pd.to_datetime(missing_dates))]
+
+        # 计算滚动平均值
+        daily["3M_Avg_Rolling"] = daily["net_sales_with_tax"].rolling(window=90, min_periods=1, center=False).mean()
+        daily["6M_Avg_Rolling"] = daily["net_sales_with_tax"].rolling(window=180, min_periods=1, center=False).mean()
 
     if not category.empty:
         category["date"] = pd.to_datetime(category["date"])
@@ -195,12 +188,33 @@ def preload_all_data():
         # 移除缺失数据的日期 - 所有分类都过滤
         category = category[~category["date"].isin(pd.to_datetime(missing_dates))]
 
-    if not items_df.empty:
-        items_df["date"] = pd.to_datetime(items_df["date"])
-        # 移除缺失数据的日期 - 商品数据也过滤
-        items_df = items_df[~items_df["date"].isin(pd.to_datetime(missing_dates))]
+        # 为每个分类计算滚动平均值
+        category_with_rolling = []
+        for cat in category["Category"].unique():
+            cat_data = category[category["Category"] == cat].copy()
+            cat_data = cat_data.sort_values("date")
+            cat_data["3M_Avg_Rolling"] = cat_data["net_sales_with_tax"].rolling(window=90, min_periods=1,
+                                                                                center=False).mean()
+            cat_data["6M_Avg_Rolling"] = cat_data["net_sales_with_tax"].rolling(window=180, min_periods=1,
+                                                                                center=False).mean()
+            category_with_rolling.append(cat_data)
 
-    return daily, category, items_df
+        category = pd.concat(category_with_rolling, ignore_index=True)
+
+    # 添加数据完整性检查
+    st.write(f"🔍 数据完整性检查:")
+    st.write(f"  - Daily数据行数: {len(daily)}")
+    st.write(f"  - Category数据行数: {len(category)}")
+    st.write(f"  - Category唯一分类数: {category['Category'].nunique()}")
+
+    # 检查是否有'None'分类
+    if 'None' in category['Category'].values:
+        none_data = category[category['Category'] == 'None']
+        st.write(f"  - 'None'分类数据: {len(none_data)}行, 总和: {none_data['net_sales'].sum()}")
+    else:
+        st.warning("⚠️ 'None'分类在数据中缺失!")
+
+    return daily, category
 
 
 def extract_item_name(item):
@@ -610,19 +624,32 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
             return date_obj
 
         # === 日期选择器 ===
-        # === 日期选择器 ===
         col_from, col_to, _ = st.columns([1, 1, 5])
         with col_from:
+            # 确保是 Python date 类型
+            if not isinstance(default_from, date):
+                try:
+                    default_from = pd.Timestamp(default_from).date()
+                except:
+                    default_from = date.today() - timedelta(days=7)
+
             t1 = st.date_input(
                 "From",
-                value=default_from,  # 直接使用已经转换的 default_from
+                value=default_from,
                 key="sr_date_from",
                 format="DD/MM/YYYY"
             )
         with col_to:
+            # 确保是 Python date 类型
+            if not isinstance(default_to, date):
+                try:
+                    default_to = pd.Timestamp(default_to).date()
+                except:
+                    default_to = date.today()
+
             t2 = st.date_input(
                 "To",
-                value=default_to,  # 直接使用已经转换的 default_to
+                value=default_to,
                 key="sr_date_to",
                 format="DD/MM/YYYY"
             )
