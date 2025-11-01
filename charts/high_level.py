@@ -150,7 +150,7 @@ def preload_all_data():
     """预加载所有需要的数据"""
     db = get_db()
 
-    # 加载交易数据
+    # 加载交易数据 - 修复：确保包含所有分类，包括空分类
     daily_sql = """
     WITH transaction_totals AS (
         SELECT 
@@ -183,7 +183,11 @@ def preload_all_data():
     WITH category_transactions AS (
         SELECT 
             date(Datetime) AS date,
-            Category,
+            -- 修复：处理空分类，确保所有数据都被包含
+            CASE 
+                WHEN Category IS NULL OR TRIM(Category) = '' THEN 'None'
+                ELSE Category 
+            END AS Category,
             [Transaction ID] AS txn_id,
             SUM([Net Sales]) AS cat_net_sales,
             SUM(COALESCE(CAST(REPLACE(REPLACE([Tax], '$', ''), ',', '') AS REAL), 0)) AS cat_tax,
@@ -231,11 +235,11 @@ def preload_all_data():
         daily["date"] = pd.to_datetime(daily["date"])
         daily = daily.sort_values("date")
 
-        # 移除缺失数据的日期 (8.18, 8.19, 8.20) - 所有数据都过滤
+        # 移除缺失数据的日期 (8.18, 8.19, 8.20)
         missing_dates = ['2025-08-18', '2025-08-19', '2025-08-20']
         daily = daily[~daily["date"].isin(pd.to_datetime(missing_dates))]
 
-        # 计算滚动平均值 - 使用更准确的窗口计算
+        # 计算滚动平均值
         daily["3M_Avg_Rolling"] = daily["net_sales_with_tax"].rolling(window=90, min_periods=1, center=False).mean()
         daily["6M_Avg_Rolling"] = daily["net_sales_with_tax"].rolling(window=180, min_periods=1, center=False).mean()
 
@@ -250,16 +254,13 @@ def preload_all_data():
         category_with_rolling = []
         for cat in category["Category"].unique():
             cat_data = category[category["Category"] == cat].copy()
-            # 按日期排序确保滚动计算正确
             cat_data = cat_data.sort_values("date")
-            # 计算该分类的滚动平均值
             cat_data["3M_Avg_Rolling"] = cat_data["net_sales_with_tax"].rolling(window=90, min_periods=1,
                                                                                 center=False).mean()
             cat_data["6M_Avg_Rolling"] = cat_data["net_sales_with_tax"].rolling(window=180, min_periods=1,
                                                                                 center=False).mean()
             category_with_rolling.append(cat_data)
 
-        # 重新组合数据
         category = pd.concat(category_with_rolling, ignore_index=True)
 
     return daily, category
@@ -843,31 +844,6 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
         category_filtered = filter_data_by_time_range(
             category_tx, time_range, selected_date, custom_dates_selected, t1, t2
         )
-
-        # === 调试信息 ===
-        st.write(f"🔍 调试信息 - 筛选后的数据行数: {len(category_filtered)}")
-
-        # 显示每个分类的net_sales明细
-        for cat in category_filtered["Category"].unique():
-            cat_data = category_filtered[category_filtered["Category"] == cat]
-            cat_sum = cat_data["net_sales"].sum()
-            st.write(f"  - {cat}: {cat_sum} (原始), {proper_round(cat_sum)} (四舍五入)")
-
-        # === 计算bar数据 ===
-        bar_data = category_filtered[category_filtered["Category"].isin(bar_cats)].copy()
-        bar_net_sales_raw = bar_data["net_sales"].sum()
-        bar_net_sales = proper_round(bar_net_sales_raw)
-
-        st.write(f"🔍 Bar分类: {bar_net_sales_raw} (原始), {bar_net_sales} (四舍五入)")
-        st.write(f"🔍 Bar包含分类: {bar_data['Category'].unique().tolist()}")
-
-        # === 计算retail数据 ===
-        retail_data = category_filtered[~category_filtered["Category"].isin(bar_cats)].copy()
-        retail_net_sales_raw = pd.to_numeric(retail_data["net_sales"], errors="coerce").sum()
-        retail_net_sales = proper_round(retail_net_sales_raw)
-
-        st.write(f"🔍 Retail分类: {retail_net_sales_raw} (原始), {retail_net_sales} (四舍五入)")
-        st.write(f"🔍 Retail包含分类: {retail_data['Category'].unique().tolist()}")
 
         # === 计算bar数据 ===
         bar_data = category_filtered[category_filtered["Category"].isin(bar_cats)].copy()

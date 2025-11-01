@@ -85,10 +85,10 @@ def _safe_sum(df, col):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def preload_all_data():
-    """预加载所有需要的数据"""
+    """预加载所有需要的数据 - 与high_level.py相同的函数"""
     db = get_db()
 
-    # 加载交易数据 - 修复：确保包含所有分类，包括空分类
+    # 加载交易数据（包含日期信息）
     daily_sql = """
     WITH transaction_totals AS (
         SELECT 
@@ -166,20 +166,35 @@ def preload_all_data():
     ORDER BY date, Category;
     """
 
+    # 加载原始交易数据用于获取商品项（包含日期信息）
+    item_sql = """
+    SELECT 
+        date(Datetime) as date,
+        -- 修复：处理空分类
+        CASE 
+            WHEN Category IS NULL OR TRIM(Category) = '' THEN 'None'
+            ELSE Category 
+        END AS Category,
+        Item,
+        [Net Sales],
+        Tax,
+        Qty,
+        [Gross Sales]
+    FROM transactions
+    WHERE Item IS NOT NULL  -- 只排除空商品项，不排除空分类
+    """
+
     daily = pd.read_sql(daily_sql, db)
     category = pd.read_sql(category_sql, db)
+    items_df = pd.read_sql(item_sql, db)
 
     if not daily.empty:
         daily["date"] = pd.to_datetime(daily["date"])
         daily = daily.sort_values("date")
 
-        # 移除缺失数据的日期 (8.18, 8.19, 8.20)
+        # 移除缺失数据的日期 (8.18, 8.19, 8.20) - 所有数据都过滤
         missing_dates = ['2025-08-18', '2025-08-19', '2025-08-20']
         daily = daily[~daily["date"].isin(pd.to_datetime(missing_dates))]
-
-        # 计算滚动平均值
-        daily["3M_Avg_Rolling"] = daily["net_sales_with_tax"].rolling(window=90, min_periods=1, center=False).mean()
-        daily["6M_Avg_Rolling"] = daily["net_sales_with_tax"].rolling(window=180, min_periods=1, center=False).mean()
 
     if not category.empty:
         category["date"] = pd.to_datetime(category["date"])
@@ -188,33 +203,12 @@ def preload_all_data():
         # 移除缺失数据的日期 - 所有分类都过滤
         category = category[~category["date"].isin(pd.to_datetime(missing_dates))]
 
-        # 为每个分类计算滚动平均值
-        category_with_rolling = []
-        for cat in category["Category"].unique():
-            cat_data = category[category["Category"] == cat].copy()
-            cat_data = cat_data.sort_values("date")
-            cat_data["3M_Avg_Rolling"] = cat_data["net_sales_with_tax"].rolling(window=90, min_periods=1,
-                                                                                center=False).mean()
-            cat_data["6M_Avg_Rolling"] = cat_data["net_sales_with_tax"].rolling(window=180, min_periods=1,
-                                                                                center=False).mean()
-            category_with_rolling.append(cat_data)
+    if not items_df.empty:
+        items_df["date"] = pd.to_datetime(items_df["date"])
+        # 移除缺失数据的日期 - 商品数据也过滤
+        items_df = items_df[~items_df["date"].isin(pd.to_datetime(missing_dates))]
 
-        category = pd.concat(category_with_rolling, ignore_index=True)
-
-    # 添加数据完整性检查
-    st.write(f"🔍 数据完整性检查:")
-    st.write(f"  - Daily数据行数: {len(daily)}")
-    st.write(f"  - Category数据行数: {len(category)}")
-    st.write(f"  - Category唯一分类数: {category['Category'].nunique()}")
-
-    # 检查是否有'None'分类
-    if 'None' in category['Category'].values:
-        none_data = category[category['Category'] == 'None']
-        st.write(f"  - 'None'分类数据: {len(none_data)}行, 总和: {none_data['net_sales'].sum()}")
-    else:
-        st.warning("⚠️ 'None'分类在数据中缺失!")
-
-    return daily, category
+    return daily, category, items_df
 
 
 def extract_item_name(item):
@@ -240,17 +234,14 @@ def prepare_sales_data(df_filtered):
     # 复制数据避免修改原数据
     df = df_filtered.copy()
 
+    # 确保包含所有数据，包括'None'分类
     # === 修改：所有Bar分类也使用net_sales（不含税）===
     df["final_sales"] = df.apply(
         lambda row: row["net_sales"] if row["Category"] in bar_cats else row["net_sales"],
         axis=1
     )
 
-    # === 修改：移除这里的四舍五入，在汇总后再进行 ===
-    # 不再在数据准备阶段进行四舍五入
-
     return df
-
 
 def extract_brand_name(item_name):
     """
@@ -707,64 +698,86 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
     bar_cats = {"Cafe Drinks", "Smoothie Bar", "Soups", "Sweet Treats", "Wraps & Salads", "Breakfast Bowls"}
     retail_cats = [c for c in df_filtered_fixed["Category"].unique() if c not in bar_cats]
 
-    # helper: 根据时间范围计算汇总数据 - 使用修复后的数据
     def time_range_summary(data, cats, range_type, start_dt, end_dt):
+        # 确保包含所有指定的分类，即使当天没有销售数据
+        # 先创建一个包含所有分类的空DataFrame作为基础
+        all_cats_df = pd.DataFrame({"Category": list(cats)})
+
+        # 获取当天的数据
         sub = data[data["Category"].isin(cats)].copy()
-        if sub.empty:
-            return pd.DataFrame()
 
-        # 使用修复后的数据聚合 - 先不四舍五入
-        summary = sub.groupby("Category", as_index=False).agg(
+        # 合并所有分类，确保即使没有销售数据的分类也包含在内
+        summary = all_cats_df.merge(sub.groupby("Category", as_index=False).agg(
             items_sold=("qty", "sum"),
-            daily_sales=("final_sales", "sum")  # 使用修复后的销售额
-        )
+            daily_sales=("final_sales", "sum")
+        ), on="Category", how="left")
 
-        # === 修改：移除这里的四舍五入，在计算完所有汇总后再进行 ===
-        # summary["items_sold"] = summary["items_sold"].apply(lambda x: proper_round(x) if pd.notna(x) else x)
-        # summary["daily_sales"] = summary["daily_sales"].apply(lambda x: proper_round(x) if pd.notna(x) else x)
+        # 填充缺失值
+        summary["items_sold"] = summary["items_sold"].fillna(0)
+        summary["daily_sales"] = summary["daily_sales"].fillna(0)
 
         # 计算与前一个相同长度时间段的对比
         if start_dt and end_dt:
-            time_diff = end_dt - start_dt
-            prev_start = start_dt - time_diff - timedelta(days=1)
-            prev_end = start_dt - timedelta(days=1)
+            # === 新增逻辑：如果选择的是同一天，则与前一天比较 ===
+            is_single_day = (start_dt.date() == end_dt.date())
 
-            # 获取前一个时间段的数据 - 使用相同的修复逻辑
-            prev_mask = (category_tx["date"] >= prev_start) & (category_tx["date"] <= prev_end)
-            prev_data = category_tx.loc[prev_mask].copy()
+            if is_single_day:
+                # ✅ 单日逻辑：使用前一天的数据进行比较
+                prev_day = start_dt - timedelta(days=1)
+                prev_start = prev_day
+                prev_end = prev_day
+            else:
+                # ✅ 正常时间段逻辑：与前一个相同长度时间段比较
+                time_diff = end_dt - start_dt
+                prev_start = start_dt - time_diff - timedelta(days=1)
+                prev_end = start_dt - timedelta(days=1)
+
+            # 获取前一个时间段的数据 - 直接从原始数据获取，确保数据完整
+            prev_mask = (category_tx["date"] >= pd.to_datetime(prev_start)) & (
+                        category_tx["date"] <= pd.to_datetime(prev_end))
+            prev_data_raw = category_tx.loc[prev_mask].copy()
 
             # 对历史数据也应用相同的修复逻辑
-            prev_data_fixed = prepare_sales_data(prev_data)
+            prev_data_fixed = prepare_sales_data(prev_data_raw)
 
             if not prev_data_fixed.empty:
-                prev_summary = prev_data_fixed[prev_data_fixed["Category"].isin(cats)].groupby("Category",
-                                                                                               as_index=False).agg(
+                # 确保只获取指定分类的数据
+                prev_data_filtered = prev_data_fixed[prev_data_fixed["Category"].isin(cats)]
+                prev_summary = prev_data_filtered.groupby("Category", as_index=False).agg(
                     prior_daily_sales=("final_sales", "sum")  # 使用修复后的销售额
                 )
 
+                # 合并前一天数据，确保所有分类都包含
                 summary = summary.merge(prev_summary, on="Category", how="left")
                 summary["prior_daily_sales"] = summary["prior_daily_sales"].fillna(0)
+
+                # 调试总销售额
+                total_prior = summary["prior_daily_sales"].sum()
             else:
                 summary["prior_daily_sales"] = 0
         else:
             summary["prior_daily_sales"] = 0
 
-            # === 修改：保留原始 daily_sales 精度，用于 Total 汇总 ===
+        # === 修改：保留原始 daily_sales 精度，用于 Total 汇总 ===
         summary["daily_sales_raw"] = summary["daily_sales"]  # 保存原始浮点值供后续计算
         MIN_BASE = 50
+
         # === 修正 weekly change ===
-        # detect if the selected period is a single day
-        is_single_day = (start_dt is not None and end_dt is not None and start_dt == end_dt)
+        # 检测是否选择了单日
+        # === 修正 weekly change ===
+        # 检测是否选择了单日
+        is_single_day = (start_dt is not None and end_dt is not None and start_dt.date() == end_dt.date())
 
         if is_single_day:
-            # ✅ Single day logic: use true daily numbers (no aggregation distortion)
+            # ✅ 单日逻辑：使用前一天的数据进行比较 (10.29 vs 10.28)
             summary["weekly_change"] = np.where(
                 summary["prior_daily_sales"] > MIN_BASE,
                 (summary["daily_sales_raw"] - summary["prior_daily_sales"]) / summary["prior_daily_sales"] * 100,
                 np.nan
             )
+
         else:
-            # ✅ Normal period vs period logic
+            # ✅ 正常时间段逻辑：与前一个相同长度时间段比较
             summary["weekly_change"] = np.where(
                 summary["prior_daily_sales"] > MIN_BASE,
                 (summary["daily_sales"] - summary["prior_daily_sales"]) / summary["prior_daily_sales"] * 100,
@@ -810,8 +823,9 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
 
     # ---------------- Bar table ----------------
     st.markdown("<h4 style='font-size:16px; font-weight:700;'>📊 Bar Categories</h4>", unsafe_allow_html=True)
-    bar_df = time_range_summary(df_filtered_fixed, bar_cats, range_opt, start_date, end_date)
 
+
+    bar_df = time_range_summary(df_filtered_fixed, bar_cats, range_opt, start_date, end_date)
     if not bar_df.empty:
         # 获取Bar分类的前3品牌
         bar_top_items = get_top_items_by_category(items_df, bar_cats, start_date, end_date, for_total=False)
@@ -843,22 +857,27 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
         bar_df = bar_df.sort_values("Sum of Daily Sales", ascending=False)
         # 创建总计行
         total_items_sold = bar_df["Sum of Items Sold"].sum()
-        total_daily_sales = bar_df["Sum of Daily Sales"].sum()
+        # === 修复：使用原始精度计算，不要提前四舍五入 ===
+        total_daily_sales_raw = bar_df["daily_sales_raw"].sum()  # 使用原始浮点值
         total_per_day = bar_df["Per day"].sum()
 
         # 计算Total行的Weekly change - 基于总销售额与前一周期的对比
         total_prior_sales = bar_df["prior_daily_sales"].sum()
         MIN_BASE = 50
         if total_prior_sales > MIN_BASE:
-            total_weekly_change = (total_daily_sales - total_prior_sales) / total_prior_sales * 100  # 乘以100
+            total_weekly_change = (total_daily_sales_raw - total_prior_sales) / total_prior_sales * 100
         else:
             total_weekly_change = np.nan
+
+        # 显示时再四舍五入
+        total_daily_sales = proper_round(total_daily_sales_raw)
+        total_daily_sales_display = f"${total_daily_sales:,.0f}"
 
         # === 创建数据框（与high_level.py相同的格式）- 总计行放在第一行 ===
         bar_summary_data = {
             'Row Labels': ["Total"] + bar_df["Row Labels"].tolist(),
             'Sum of Items Sold': [total_items_sold] + bar_df["Sum of Items Sold"].tolist(),
-            'Sum of Daily Sales': [f"${total_daily_sales:,.0f}"] + bar_df["Sum of Daily Sales Display"].tolist(),
+            'Sum of Daily Sales': [total_daily_sales_display] + bar_df["Sum of Daily Sales Display"].tolist(),
             '_sort_daily_sales': [total_daily_sales] + bar_df["_sort_daily_sales"].tolist(),
 
             'Weekly change': [total_weekly_change] + bar_df["Weekly change"].tolist(),
