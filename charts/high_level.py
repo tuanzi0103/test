@@ -449,9 +449,9 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
 
     df_plot = pd.concat(parts_tx, ignore_index=True)
 
-    # 数据映射 - 修改2：为每个数据类型都添加3M和6M Avg的映射
     data_map_extended = {
         "Daily Net Sales": "net_sales_with_tax",
+        "Weekly Net Sales": "weekly_net_sales",
         "Daily Transactions": "transactions",
         "Avg Transaction": "avg_txn",
         "Items Sold": "qty",
@@ -460,6 +460,8 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
         # 为每个数据类型添加对应的3M和6M Avg
         "Daily Net Sales 3M Avg": "3M_Avg_Rolling",
         "Daily Net Sales 6M Avg": "6M_Avg_Rolling",
+        "Weekly Net Sales 3M Avg": "weekly_net_sales_3M_Avg",  # 新增这一行
+        "Weekly Net Sales 6M Avg": "weekly_net_sales_6M_Avg",  # 新增这一行
         "Daily Transactions 3M Avg": "transactions_3M_Avg",
         "Daily Transactions 6M Avg": "transactions_6M_Avg",
         "Avg Transaction 3M Avg": "avg_txn_3M_Avg",
@@ -545,7 +547,116 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
     if "profit_amount" not in df_plot.columns:
         df_plot["profit_amount"] = 0
 
-    # 创建融合数据框用于图表
+    # === 新增：Weekly Net Sales 计算 ===
+    if "Weekly Net Sales" in data_sel or any("Weekly Net Sales" in dt for dt in data_sel):
+        # 创建周聚合数据
+        weekly_base_data = []
+
+        # 为每个分类单独处理周数据
+        for category in df_plot['Category'].unique():
+            cat_data = df_plot[df_plot['Category'] == category].copy()
+
+            # === 修复：使用 %Y-%W 格式，以周一作为一周的第一天 ===
+            cat_data['year_week'] = cat_data['date'].dt.strftime('%Y-%W')
+
+            # 按周分组聚合
+            weekly_agg = cat_data.groupby('year_week').agg({
+                'net_sales_with_tax': 'sum',
+                'transactions': 'sum',
+                'avg_txn': 'mean',
+                'qty': 'sum'
+            }).reset_index()
+
+            # 只保留有实际销售数据的周
+            weekly_agg = weekly_agg[weekly_agg['net_sales_with_tax'] > 0]
+
+            if not weekly_agg.empty:
+                # === 修复：使用正确的周计算，以周一作为一周的第一天 ===
+                weekly_agg['date'] = pd.to_datetime(weekly_agg['year_week'] + '-1', format='%Y-%W-%w')
+                weekly_agg['Category'] = category
+
+                # === 修复：正确的周滚动平均值计算 ===
+                # 按日期排序
+                weekly_agg = weekly_agg.sort_values('date')
+
+                # 计算周滚动平均值（13周和26周，对应3个月和6个月）
+                weekly_agg['weekly_net_sales_3M_Avg'] = weekly_agg['net_sales_with_tax'].rolling(
+                    window=13, min_periods=1, center=False
+                ).mean()
+                weekly_agg['weekly_net_sales_6M_Avg'] = weekly_agg['net_sales_with_tax'].rolling(
+                    window=26, min_periods=1, center=False
+                ).mean()
+
+                # 重命名列以匹配数据映射
+                weekly_agg = weekly_agg.rename(columns={
+                    'net_sales_with_tax': 'weekly_net_sales'
+                })
+
+                # === 关键修复：确保所有需要的列都存在 ===
+                # 添加其他必要列
+                required_columns = ['inventory_value', 'profit_amount',
+                                    'transactions_3M_Avg', 'transactions_6M_Avg',
+                                    'avg_txn_3M_Avg', 'avg_txn_6M_Avg',
+                                    'qty_3M_Avg', 'qty_6M_Avg',
+                                    '3M_Avg_Rolling', '6M_Avg_Rolling']
+
+                for col in required_columns:
+                    weekly_agg[col] = 0
+
+                weekly_base_data.append(weekly_agg)
+
+        if weekly_base_data:
+            # 合并所有分类的周数据
+            weekly_combined = pd.concat(weekly_base_data, ignore_index=True)
+
+            # 只保留需要的列
+            keep_columns = ['date', 'Category', 'weekly_net_sales', 'weekly_net_sales_3M_Avg',
+                            'weekly_net_sales_6M_Avg', 'transactions', 'avg_txn', 'qty',
+                            '3M_Avg_Rolling', '6M_Avg_Rolling', 'inventory_value', 'profit_amount',
+                            'transactions_3M_Avg', 'transactions_6M_Avg', 'avg_txn_3M_Avg',
+                            'avg_txn_6M_Avg', 'qty_3M_Avg', 'qty_6M_Avg']
+
+            # 确保所有列都存在
+            for col in keep_columns:
+                if col not in weekly_combined.columns:
+                    weekly_combined[col] = 0
+
+            weekly_combined = weekly_combined[keep_columns]
+
+            # === 关键修改：将周数据添加到主数据框，而不是替换 ===
+            # 将周数据合并到主数据框中（添加而不是替换）
+            df_plot = pd.concat([df_plot, weekly_combined], ignore_index=True)
+
+            # 移除临时的 year_week 列（如果存在）
+            if 'year_week' in df_plot.columns:
+                df_plot = df_plot.drop('year_week', axis=1)
+
+    # === 在这里添加调试代码 ===
+    print("=== DEBUG INFO ===")
+    print("Available columns in df_plot:", sorted(df_plot.columns.tolist()))
+    print("Data types selected:", data_sel)
+    print("--- Column existence check ---")
+    for data_type in data_sel:
+        col_name = data_map_extended.get(data_type)
+        exists = col_name in df_plot.columns if col_name else False
+        print(f"Data type: {data_type:25} | Column: {col_name:30} | Exists: {exists}")
+    print("=== END DEBUG ===")
+
+    # === 新增：Weekly Net Sales 列检查 ===
+    print("=== DEBUG: Weekly Net Sales Columns ===")
+    print("weekly_net_sales in columns:", 'weekly_net_sales' in df_plot.columns)
+    print("weekly_net_sales_3M_Avg in columns:", 'weekly_net_sales_3M_Avg' in df_plot.columns)
+    print("weekly_net_sales_6M_Avg in columns:", 'weekly_net_sales_6M_Avg' in df_plot.columns)
+
+    if 'weekly_net_sales' in df_plot.columns:
+        weekly_data_exists = (df_plot['weekly_net_sales'] > 0).any()
+        print("Weekly data exists:", weekly_data_exists)
+        if weekly_data_exists:
+            sample_weekly = df_plot[df_plot['weekly_net_sales'] > 0].head(3)
+            print("Sample weekly data:")
+            print(sample_weekly[
+                      ['date', 'Category', 'weekly_net_sales', 'weekly_net_sales_3M_Avg', 'weekly_net_sales_6M_Avg']])
+
     melted_dfs = []
     for data_type in data_sel:
         col_name = data_map_extended.get(data_type)
@@ -554,15 +665,19 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
             temp_df = temp_df.rename(columns={col_name: "value"})
             temp_df["data_type"] = data_type
 
-            # 对 Daily Net Sales 进行四舍五入取整
-            if data_type == "Daily Net Sales":
+            # === 修改：对 Daily Net Sales 和 Weekly Net Sales 进行四舍五入取整 ===
+            if data_type in ["Daily Net Sales", "Weekly Net Sales"]:
                 temp_df["value"] = temp_df["value"].apply(lambda x: proper_round(x) if not pd.isna(x) else 0)
+
+            # === 关键修改：对于 Weekly Net Sales 及其平均值，移除值为0的数据点 ===
+            if data_type in ["Weekly Net Sales", "Weekly Net Sales 3M Avg", "Weekly Net Sales 6M Avg"]:
+                temp_df = temp_df[temp_df["value"] > 0]
 
             # 放宽过滤条件
             temp_df = temp_df[temp_df["value"].notna()]
             if not temp_df.empty:
                 melted_dfs.append(temp_df)
-
+                
     if melted_dfs:
         combined_df = pd.concat(melted_dfs, ignore_index=True)
         combined_df["series"] = combined_df["Category"] + " - " + combined_df["data_type"]
@@ -1133,7 +1248,8 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
     with col2:
         data_sel_base = persisting_multiselect(
             "Choose data types",
-            ["Daily Net Sales", "Daily Transactions", "Avg Transaction", "Items Sold", "Inventory Value"],
+            ["Daily Net Sales", "Weekly Net Sales", "Daily Transactions", "Avg Transaction", "Items Sold",
+             "Inventory Value"],
             key="hl_data_base",
             width_chars=22
         )
@@ -1173,7 +1289,8 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
     # 如果选择了平均值，为每个选择的基础数据类型添加对应的平均值
     for avg_type in data_sel_avg:
         for base_type in data_sel_base:
-            if base_type in ["Daily Net Sales", "Daily Transactions", "Avg Transaction", "Items Sold"]:
+            if base_type in ["Daily Net Sales", "Weekly Net Sales", "Daily Transactions", "Avg Transaction",
+                             "Items Sold"]:  # 修改这一行，添加 "Weekly Net Sales"
                 combined_type = f"{base_type} {avg_type}"
                 data_sel.append(combined_type)
 
@@ -1272,11 +1389,27 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
             # 显示数据表格 - 直接展示，去掉下拉框
             st.markdown("#### 📊 Combined Data for All Selected Types")
             display_df = combined_df.copy()
-            display_df["date"] = display_df["date"].dt.strftime("%d/%m/%Y")  # 改为欧洲日期格式
 
-            # 对表格中的 Daily Net Sales 也进行四舍五入取整
-            display_df.loc[display_df["data_type"] == "Daily Net Sales", "value"] = display_df.loc[
-                display_df["data_type"] == "Daily Net Sales", "value"
+            # === 修改：为 Weekly Net Sales 显示周区间 ===
+            def format_weekly_date(row):
+                if "Weekly Net Sales" in row["data_type"]:
+                    # 计算周的起始和结束日期（周一到周日）
+                    week_start = row["date"]
+                    week_end = week_start + pd.Timedelta(days=6)
+                    # 确保周区间不重叠：如果起始日期不是周一，调整为周一
+                    if week_start.weekday() != 0:  # 0 代表周一
+                        week_start = week_start - pd.Timedelta(days=week_start.weekday())
+                        week_end = week_start + pd.Timedelta(days=6)
+                    return f"{week_start.strftime('%d/%m/%Y')}-{week_end.strftime('%d/%m/%Y')}"
+                else:
+                    return row["date"].strftime("%d/%m/%Y")
+
+            display_df["date"] = display_df.apply(format_weekly_date, axis=1)
+
+            # === 修改：对表格中的 Daily Net Sales 和 Weekly Net Sales 也进行四舍五入取整 ===
+            display_df.loc[display_df["data_type"].isin(["Daily Net Sales", "Weekly Net Sales"]), "value"] = \
+            display_df.loc[
+                display_df["data_type"].isin(["Daily Net Sales", "Weekly Net Sales"]), "value"
             ].apply(lambda x: proper_round(x) if not pd.isna(x) else 0)
 
             display_df = display_df.rename(columns={
@@ -1285,8 +1418,17 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
                 "data_type": "Data Type",
                 "value": "Value"
             })
-            # 修复：按日期正确排序
-            display_df["Date_dt"] = pd.to_datetime(display_df["Date"], format='%d/%m/%Y')
+
+            # 修复：按日期正确排序（需要创建一个临时日期列用于排序）
+            def get_sort_date(row):
+                if "Weekly Net Sales" in row["Data Type"]:
+                    # 从周区间中提取起始日期
+                    start_date_str = row["Date"].split('-')[0]
+                    return pd.to_datetime(start_date_str, format='%d/%m/%Y')
+                else:
+                    return pd.to_datetime(row["Date"], format='%d/%m/%Y')
+
+            display_df["Date_dt"] = display_df.apply(get_sort_date, axis=1)
             display_df = display_df.sort_values(["Date_dt", "Category", "Data Type"])
             display_df = display_df.drop("Date_dt", axis=1)
 
@@ -1344,6 +1486,13 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
             avg_mask = display_df["Data Type"].str.contains("3M Avg|6M Avg", case=False, na=False)
             display_df.loc[avg_mask, "Value"] = display_df.loc[avg_mask, "Value"].apply(
                 lambda x: round(x, 2) if pd.notna(x) else x
+            )
+
+            # 新增：对 Weekly Net Sales 也进行四舍五入取整
+            weekly_mask = display_df["Data Type"].str.contains("Weekly Net Sales", case=False, na=False) & ~display_df[
+                "Data Type"].str.contains("Avg", case=False, na=False)
+            display_df.loc[weekly_mask, "Value"] = display_df.loc[weekly_mask, "Value"].apply(
+                lambda x: proper_round(x) if not pd.isna(x) else 0
             )
 
             st.dataframe(display_df, use_container_width=False, column_config=column_config)
