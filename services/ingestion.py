@@ -13,7 +13,7 @@ from services.db import get_db
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
 
-FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
+FOLDER_ID = "1lZGE0DkgKyox1HbBzuhZ-oypDF478jBj"
 
 # ✅ 全局缓存 drive 实例
 _drive_instance = None
@@ -24,14 +24,9 @@ def get_drive():
     if _drive_instance is not None:
         return _drive_instance
 
-    from pydrive2.auth import GoogleAuth
-    from pydrive2.drive import GoogleDrive
-    import streamlit as st
-    import os
-
     gauth = GoogleAuth()
 
-    gauth.settings['client_config_backend'] = 'settings'
+    # ✅ 设置 OAuth 为 offline，确保 refresh_token 存下来
     gauth.settings['oauth_scope'] = [
         "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/drive.file",
@@ -40,50 +35,20 @@ def get_drive():
     gauth.settings['get_refresh_token'] = True
 
     token_path = "credentials.json"
+    if os.path.exists(token_path):
+        gauth.LoadCredentialsFile(token_path)
 
-    # App running on Streamlit Cloud
-    is_cloud = os.getenv("STREAMLIT_SERVER_ENABLED", False)
+    if gauth.credentials is None:
+        # 第一次认证：加 offline
+        gauth.LocalWebserverAuth()  # 这里会弹浏览器
+    elif gauth.access_token_expired:
+        gauth.Refresh()
+    else:
+        gauth.Authorize()
 
-    try:
-        # Load cached token if exists
-        if os.path.exists(token_path):
-            gauth.LoadCredentialsFile(token_path)
-
-        # 1) No token → login
-        if gauth.credentials is None:
-            st.warning("🔑 Please sign in with Google to load data")
-
-            if is_cloud:
-                # Cloud: No browser available
-                gauth.CommandLineAuth()
-            else:
-                # Local dev: open browser auth
-                gauth.LocalWebserverAuth()
-
-            gauth.SaveCredentialsFile(token_path)
-
-        # 2) Token expired → refresh
-        elif gauth.access_token_expired:
-            try:
-                gauth.Refresh()
-                gauth.SaveCredentialsFile(token_path)
-            except:
-                st.warning("⚠️ Session expired — please re-authenticate")
-                if is_cloud:
-                    gauth.CommandLineAuth()
-                else:
-                    gauth.LocalWebserverAuth()
-                gauth.SaveCredentialsFile(token_path)
-
-        else:
-            gauth.Authorize()
-
-        _drive_instance = GoogleDrive(gauth)
-        return _drive_instance
-
-    except Exception as e:
-        st.error(f"❌ Google authentication failed: {e}")
-        raise
+    gauth.SaveCredentialsFile(token_path)
+    _drive_instance = GoogleDrive(gauth)
+    return _drive_instance
 
 
 def upload_file_to_drive(local_path: str, remote_name: str):
