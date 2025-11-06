@@ -5,15 +5,6 @@ import math
 import numpy as np
 from services.db import get_db
 
-# === 添加页面配置 - 修复布局不一致问题 ===
-st.set_page_config(
-    page_title="Vie Manly Dashboard",
-    layout="wide",
-    initial_sidebar_state="auto",
-    menu_items=None
-)
-
-
 def _safe_sum(df, col):
     if df is None or df.empty or col not in df.columns:
         return 0.0
@@ -747,6 +738,10 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
         daily, category_tx = preload_all_data()
         inv_grouped, inv_latest_date = _prepare_inventory_grouped(inv)
 
+    # 初始化分类选择的 session state
+    if "hl_cats" not in st.session_state:
+        st.session_state["hl_cats"] = []
+
     if daily.empty:
         st.warning("No transaction data available. Please upload data first.")
         return
@@ -1263,12 +1258,31 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
         )
 
     with col4:
-        cats_sel = persisting_multiselect(
-            "Choose categories",
-            all_cats_extended,
-            key="hl_cats",
-            width_chars=30
-        )
+        # 为分类选择创建表单，避免立即 rerun
+        with st.form(key="categories_form"):
+            cats_sel = st.multiselect(
+                "Choose categories",
+                all_cats_extended,
+                default=st.session_state.get("hl_cats", []),
+                key="hl_cats_widget"
+            )
+
+            # 应用按钮
+            submitted = st.form_submit_button("Apply", type="primary", use_container_width=True)
+
+            if submitted:
+                # 更新 session state
+                st.session_state["hl_cats"] = cats_sel
+                st.rerun()
+
+        # 从 session state 获取最终的选择
+        cats_sel = st.session_state.get("hl_cats", [])
+
+        # 显示当前选择状态
+        if cats_sel:
+            st.caption(f"✅ Selected: {len(cats_sel)} categories")
+        else:
+            st.caption("ℹ️ No categories selected")
 
     # 加一小段 CSS，让四个框左对齐、间距最小
     st.markdown("""

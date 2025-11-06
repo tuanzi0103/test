@@ -69,14 +69,12 @@ def persisting_multiselect(label, options, key, default=None, width_chars=None):
     </style>
     """, unsafe_allow_html=True)
 
-    # --- 修复：确保默认值存在于新 options 中 ---
-    valid_defaults = [v for v in st.session_state[key] if v in options]
-    if len(valid_defaults) < len(st.session_state[key]):
-        st.warning(
-            "⚠️ Some previously selected items are no longer available due to new input; selection has been reset.")
-        st.session_state[key] = valid_defaults
+    # ✅ 新逻辑：保留之前已选项（不会因为搜索过滤被清空）
+    prev_selected = st.session_state[key]
+    merged_options = sorted(set(options) | set(prev_selected))  # 合并已选项 + 当前过滤结果
 
-    return st.multiselect(label, options, default=valid_defaults, key=key)
+    selected = st.multiselect(label, merged_options, default=prev_selected, key=key)
+    return selected
 
 
 def filter_by_time_range(df, time_range, custom_dates_selected=False, t1=None, t2=None):
@@ -390,18 +388,45 @@ def show_inventory(tx, inventory: pd.DataFrame):
             if low_stock_search_term:
                 search_lower = low_stock_search_term.lower()
                 filtered_options = [item for item in options if search_lower in str(item).lower()]
+                prev_selected = st.session_state.get("low_stock_filter", [])
+                filtered_options = sorted(set(filtered_options) | set(prev_selected))
                 item_count_text = f"{len(filtered_options)} items"
             else:
                 filtered_options = options
                 item_count_text = f"{len(options)} items"
 
-            selected_items = persisting_multiselect(
-                f"Select Items ({item_count_text})",
-                filtered_options,
-                key="low_stock_filter",
-                default=[],
-                width_chars=25  # 与输入框对齐
-            )
+            # === 用 form 包裹，防止选择时自动 rerun ===
+            with st.form(key="low_stock_form"):
+                selected_temp = st.multiselect(
+                    f"Select Items ({item_count_text})",
+                    filtered_options,
+                    default=st.session_state.get("low_stock_filter", []),
+                    key="low_stock_filter_temp"
+                )
+
+                # 红色 Apply 按钮样式（和 high_level 一样）
+                st.markdown("""
+                <style>
+                div[data-testid="stFormSubmitButton"] button {
+                    background-color: #ff4b4b !important;
+                    color: white !important;
+                    font-weight: 600 !important;
+                    border: none !important;
+                    border-radius: 8px !important;
+                    height: 2.2em !important;
+                    width: 100% !important;
+                }
+                </style>
+                """, unsafe_allow_html=True)
+
+                submitted = st.form_submit_button("Apply")
+
+                if submitted:
+                    st.session_state["low_stock_filter"] = selected_temp
+                    st.success("Selections applied!")
+
+            # 从 session_state 获取最终选择
+            selected_items = st.session_state.get("low_stock_filter", [])
 
         with col_threshold_low:
             # Current Quantity ≤

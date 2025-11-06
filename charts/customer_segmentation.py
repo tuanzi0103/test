@@ -504,7 +504,7 @@ def show_customer_segmentation(tx, members):
         options = options.to_dict(orient="records")
 
     # 🔹 使用三列布局缩短下拉框宽度，与 inventory.py 保持一致
-    col_search, _ = st.columns([1, 6])
+    col_search, _ = st.columns([1.2, 5.8])
     with col_search:
         # 创建选项映射
         # ✅ 下拉框只显示用户名，不显示ID
@@ -513,13 +513,36 @@ def show_customer_segmentation(tx, members):
         # 确保选项是字符串类型
         customer_options = [str(opt["Customer ID"]) for opt in options]
 
-        sel_ids = persisting_multiselect(
-            "🔎 Search customers",
-            options=customer_options,
-            format_func=lambda x: option_dict.get(x, x),
-            key="customer_search",
-            width_chars=15
-        )
+        # 初始化 session state
+        if "customer_search_ids" not in st.session_state:
+            st.session_state["customer_search_ids"] = []
+
+        # 为分类选择创建表单，避免立即 rerun
+        with st.form(key="customer_search_form"):
+            sel_ids = st.multiselect(
+                "🔎 Search customers",
+                options=customer_options,
+                default=st.session_state.get("customer_search_ids", []),
+                format_func=lambda x: option_dict.get(x, x),
+                key="customer_search_widget"
+            )
+
+            # 应用按钮
+            submitted = st.form_submit_button("Apply", type="primary", use_container_width=True)
+
+            if submitted:
+                # 更新 session state
+                st.session_state["customer_search_ids"] = sel_ids
+                st.rerun()
+
+        # 从 session state 获取最终的选择
+        sel_ids = st.session_state.get("customer_search_ids", [])
+
+        # 显示当前选择状态
+        if sel_ids:
+            st.caption(f"✅ Selected: {len(sel_ids)} customers")
+        else:
+            st.caption("ℹ️ No customers selected")
 
     if sel_ids:
         # === 修复：兼容 Customer ID 变更或为空的情况 ===

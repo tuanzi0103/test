@@ -540,6 +540,12 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
     with st.spinner("Loading data..."):
         daily, category_tx, items_df = preload_all_data()
 
+    # 在这里添加初始化代码
+    if "bar_items_select" not in st.session_state:
+        st.session_state["bar_items_select"] = []
+    if "retail_items_select" not in st.session_state:
+        st.session_state["retail_items_select"] = []
+
     if category_tx.empty:
         st.info("No category data available.")
         return
@@ -999,12 +1005,31 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                     width_chars=22
                 )
             with col_bar2:
-                selected_bar_items = persisting_multiselect_with_width(
-                    "Select Items from Bar Categories",
-                    options=bar_item_options,
-                    key="bar_items_select",
-                    width_chars=30
-                )
+                # 为商品项选择创建表单，避免立即 rerun
+                with st.form(key="bar_items_form"):
+                    selected_bar_items = st.multiselect(
+                        "Select Items from Bar Categories",
+                        options=bar_item_options,
+                        default=st.session_state.get("bar_items_select", []),
+                        key="bar_items_widget"
+                    )
+
+                    # 应用按钮
+                    submitted_bar = st.form_submit_button("Apply", type="primary", use_container_width=True)
+
+                    if submitted_bar:
+                        # 更新 session state
+                        st.session_state["bar_items_select"] = selected_bar_items
+                        st.rerun()
+
+                # 从 session state 获取最终的选择
+                selected_bar_items = st.session_state.get("bar_items_select", [])
+
+                # 显示当前选择状态
+                if selected_bar_items:
+                    st.caption(f"✅ Selected: {len(selected_bar_items)} items")
+                else:
+                    st.caption("ℹ️ No items selected")
 
             # 显示选中的商品项数据
             if selected_bar_categories or selected_bar_items:
@@ -1326,24 +1351,56 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                     key="retail_item_search_term"
                 )
 
-            # --- Item multiselect (filtered) ---
             with col_retail3:
+                # ✅ 改进搜索逻辑：保留之前已选项
                 if retail_item_search_term:
                     search_lower = retail_item_search_term.lower()
                     filtered_retail_items = [
                         item for item in retail_item_options if search_lower in str(item).lower()
                     ]
-                    item_count_text = f"{len(filtered_retail_items)} items"
+
+                    # ✅ 合并之前已选的项（防止输入新关键词后选项丢失）
+                    prev_selected = st.session_state.get("retail_items_select", [])
+                    filtered_retail_items = sorted(set(filtered_retail_items) | set(prev_selected))
+                    item_count_text = f"{len(filtered_retail_items)} items (search active)"
                 else:
                     filtered_retail_items = retail_item_options
                     item_count_text = f"{len(retail_item_options)} items"
 
-                selected_retail_items = persisting_multiselect_with_width(
-                    f"Select Items ({item_count_text})",
-                    options=filtered_retail_items,
-                    key="retail_items_select",
-                    width_chars=30
-                )
+                # 为商品项选择创建表单，避免立即 rerun
+                with st.form(key="retail_items_form"):
+                    # ✅ 改进：保留已选项，即使不在当前搜索结果中也能显示
+                    current_selection = st.session_state.get("retail_items_select", [])
+                    merged_options = sorted(set(filtered_retail_items) | set(current_selection))
+
+                    selected_retail_items = st.multiselect(
+                        f"Select Items ({item_count_text})",
+                        options=merged_options,
+                        default=current_selection,
+                        key="retail_items_widget"
+                    )
+
+                    # 应用按钮
+                    submitted_retail = st.form_submit_button("Apply", type="primary", use_container_width=True)
+
+                    if submitted_retail:
+                        # 更新 session state
+                        st.session_state["retail_items_select"] = selected_retail_items
+                        st.rerun()
+
+                # 从 session state 获取最终的选择
+                selected_retail_items = st.session_state.get("retail_items_select", [])
+
+                # 显示当前选择状态（包括不在当前过滤列表中的选项）
+                total_selected = len(selected_retail_items)
+                if total_selected > 0:
+                    visible_selected = len([item for item in selected_retail_items if item in filtered_retail_items])
+                    if visible_selected == total_selected:
+                        st.caption(f"✅ Selected: {total_selected} items")
+                    else:
+                        st.caption(f"✅ Selected: {total_selected} items ({visible_selected} visible)")
+                else:
+                    st.caption("ℹ️ No items selected")
 
             # 显示选中的商品项数据
             if selected_retail_categories or selected_retail_items:

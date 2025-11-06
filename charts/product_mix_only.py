@@ -229,7 +229,31 @@ def compute_combo_forecast_category(tx, combo):
 
 # ==================== 页面入口 ====================
 def show_product_mix_only(tx: pd.DataFrame):
-    st.header("📊 Product Mix")
+    # === 全局样式: 让 st.dataframe 里的所有表格文字左对齐 ===
+    st.markdown("""
+    <style>
+    [data-testid="stDataFrame"] table {
+        text-align: left !important;
+    }
+    [data-testid="stDataFrame"] th {
+        text-align: left !important;
+    }
+    [data-testid="stDataFrame"] td {
+        text-align: left !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <h2 style='font-size:22px; font-weight:700; margin-top:-2rem !important; margin-bottom:0.2rem !important;'>📊 Product Mix</h2>
+    <style>
+    /* 去掉 Streamlit 默认标题和上一个元素之间的间距 */
+    div.block-container h2 {
+        padding-top: 0 !important;
+        margin-top: -2rem !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     if tx is None or tx.empty:
         st.info("No transaction data available.")
@@ -240,7 +264,7 @@ def show_product_mix_only(tx: pd.DataFrame):
     tx["date"] = tx["Datetime"].dt.normalize()  # 保持 Timestamp，不转成 date
 
     # --------- 建议 ---------
-    st.subheader("💡 Discount Forecast Suggestions")
+    st.markdown("<h3 style='font-size:18px; font-weight:700;'>💡 Discount Forecast Suggestions</h3>", unsafe_allow_html=True)
     cat_col = _category_col(tx)
     item_col = _item_col(tx)
     base_cols = [c for c in [cat_col or "", item_col, "Qty", "Datetime", "Customer ID"] if c and c in tx.columns]
@@ -257,12 +281,17 @@ def show_product_mix_only(tx: pd.DataFrame):
     for s in sugg.get("discount_slow", []):   rows.append({"strategy": "Discount slow mover", "combo": s})
     sugg_df = pd.DataFrame(rows, columns=["strategy", "combo"])
     if not sugg_df.empty:
-        st.table(sugg_df)
+        # === 设置 Discount Forecast Suggestions 表格列宽 ===
+        suggestion_column_config = {
+            "strategy": st.column_config.Column(width=160),
+            "combo": st.column_config.Column(width=200)
+        }
+        st.dataframe(sugg_df, column_config=suggestion_column_config, use_container_width=False)
     else:
         st.info("No suggestions available based on current data.")
 
     # --------- Inventory KPIs ---------
-    st.subheader("📦 Inventory Details")
+    st.markdown("<h3 style='font-size:18px; font-weight:700;'>📦 Inventory Details</h3>", unsafe_allow_html=True)
 
     conn = get_db()
     try:
@@ -289,10 +318,7 @@ def show_product_mix_only(tx: pd.DataFrame):
 
     df = inv.copy()
     out = pd.DataFrame({
-        "Item Name": df[inv_key],
-        "Variation Name": df.get("Variation Name", ""),
-        "GTIN": df.get("GTIN", ""),
-        "SKU": df.get("SKU", ""),
+        "Item Name": df[inv_key]
     })
 
     if "Current Quantity Vie Market & Bar" in inv.columns:
@@ -363,23 +389,22 @@ def show_product_mix_only(tx: pd.DataFrame):
     out["Sales velocity"] = out["Item Name"].apply(calc_velocity).astype(str) + " per month"
     out["Out of stock"] = out.apply(calc_out_of_stock, axis=1)
 
-    # Last received（智能识别）
-    lr_col = None
-    for c in inv.columns:
-        cl = c.lower().strip()
-        if cl in {"last received", "last_received"} or re.search(r"last.*receiv", cl) or re.search(
-                r"(received.*date|date.*received)", cl):
-            lr_col = c
-            break
-    out["Last received"] = inv[lr_col] if lr_col else ""
-
     # 日期格式化
-    for dcol in ["Last sold", "Last received"]:
+    for dcol in ["Last sold"]:
         if dcol in out.columns:
             out[dcol] = out[dcol].apply(_format_dmy)
 
-    show_cols = ["Item Name", "Variation Name", "GTIN", "SKU",
-                 "Sell-through", "On hand", "Sold", "Sales velocity",
-                 "Last sold", "Last received", "Out of stock"]
+    show_cols = ["Item Name", "Sell-through", "On hand", "Sold", "Sales velocity", "Last sold", "Out of stock"]
 
-    st.dataframe(out[show_cols], use_container_width=True)
+    # === 设置 Inventory Details 表格列宽 ===
+    inventory_column_config = {
+        "Item Name": st.column_config.Column(width=250),
+        "Sell-through": st.column_config.Column(width=90),
+        "On hand": st.column_config.Column(width=60),
+        "Sold": st.column_config.Column(width=40),
+        "Sales velocity": st.column_config.Column(width=100),
+        "Last sold": st.column_config.Column(width=80),
+        "Out of stock": st.column_config.Column(width=100)
+    }
+
+    st.dataframe(out[show_cols], column_config=inventory_column_config, use_container_width=False)
