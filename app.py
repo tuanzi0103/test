@@ -1,5 +1,11 @@
-import os
 import streamlit as st
+
+st.set_page_config(
+    page_title="Vie Manly Analytics",
+    layout="wide",
+    initial_sidebar_state="auto"
+)
+import os
 import pandas as pd
 from services.analytics import load_all
 from services.db import get_db
@@ -15,12 +21,7 @@ import sys
 from services.ingestion import ingest_from_drive_all
 import platform
 import numpy as np
-
-st.set_page_config(
-    page_title="Vie Manly Analytics",
-    layout="wide",
-    initial_sidebar_state="auto"
-)
+from datetime import datetime, timedelta
 
 # 关闭文件监控，避免 Streamlit Cloud 报 inotify 错误
 os.environ["WATCHDOG_DISABLE_FILE_WATCH"] = "true"
@@ -31,8 +32,8 @@ init_db()  # 必须先初始化数据库表结构
 # ✅ 如果是空库 → 从 Google Drive 导入（现在表已经存在）
 init_db_from_drive_once()
 
-st.set_page_config(page_title="Manly Farm Dashboard", layout="wide")
 st.markdown("<h1 style='font-size:26px; font-weight:700;'>📊 Vie Manly Dashboard</h1>", unsafe_allow_html=True)
+
 
 # ✅ 缓存数据库加载
 @st.cache_data(show_spinner="loading...")
@@ -41,11 +42,85 @@ def load_db_cached(days=365):
     return load_all(db=db)
 
 
+# === 数据缺失检查函数 ===
+def check_missing_data(tx, inv):
+    """检查从2025-11-01开始缺失的数据日期"""
+    missing_info = {
+        'transaction_dates': [],
+        'inventory_dates': []
+    }
+
+    # 设置检查的起始日期
+    start_date = datetime(2025, 11, 1).date()
+    end_date = datetime.now().date()
+
+    # 检查交易数据缺失
+    if tx is not None and not tx.empty and 'Datetime' in tx.columns:
+        # 转换日期列
+        tx_dates = pd.to_datetime(tx['Datetime'], errors='coerce').dt.date
+        tx_dates = tx_dates.dropna().unique()
+
+        # 生成所有应该有的日期
+        all_dates = [start_date + timedelta(days=x) for x in range((end_date - start_date).days + 1)]
+
+        # 找出缺失的日期
+        for date in all_dates:
+            if date not in tx_dates:
+                missing_info['transaction_dates'].append(date)
+
+    # 检查库存数据缺失
+    if inv is not None and not inv.empty and 'source_date' in inv.columns:
+        # 转换日期列
+        inv_dates = pd.to_datetime(inv['source_date'], errors='coerce').dt.date
+        inv_dates = inv_dates.dropna().unique()
+
+        # 生成所有应该有的日期
+        all_dates = [start_date + timedelta(days=x) for x in range((end_date - start_date).days + 1)]
+
+        # 找出缺失的日期
+        for date in all_dates:
+            if date not in inv_dates:
+                missing_info['inventory_dates'].append(date)
+
+    return missing_info
+
+
 # === 数据加载 ===
 tx, mem, inv = load_db_cached()
 
 # === Sidebar ===
 st.sidebar.header("⚙️ Settings")
+
+# === 数据缺失预警 ===
+missing_data = check_missing_data(tx, inv)
+
+if missing_data['transaction_dates'] or missing_data['inventory_dates']:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### ⚠️ Data missing warning")
+
+    if missing_data['transaction_dates']:
+        st.sidebar.error("**Missing transaction date:**")
+        # 显示最近7天的缺失日期，其他的折叠显示
+        recent_missing = sorted(missing_data['transaction_dates'])[-7:]
+        for date in recent_missing:
+            st.sidebar.write(f"📅 {date.strftime('%Y-%m-%d')}")
+
+        if len(missing_data['transaction_dates']) > 7:
+            with st.sidebar.expander(f"check all {len(missing_data['transaction_dates'])} missing dates"):
+                for date in sorted(missing_data['transaction_dates']):
+                    st.write(f"📅 {date.strftime('%Y-%m-%d')}")
+
+    if missing_data['inventory_dates']:
+        st.sidebar.warning("**Missing inventory date:**")
+        # 显示最近7天的缺失日期，其他的折叠显示
+        recent_missing = sorted(missing_data['inventory_dates'])[-7:]
+        for date in recent_missing:
+            st.sidebar.write(f"📦 {date.strftime('%Y-%m-%d')}")
+
+        if len(missing_data['inventory_dates']) > 7:
+            with st.sidebar.expander(f"check all {len(missing_data['inventory_dates'])} missing dates"):
+                for date in sorted(missing_data['inventory_dates']):
+                    st.write(f"📦 {date.strftime('%Y-%m-%d')}")
 
 # 文件上传 - 添加上传状态跟踪
 if "uploaded_file_names" not in st.session_state:
