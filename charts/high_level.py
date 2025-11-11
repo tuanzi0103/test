@@ -5,6 +5,7 @@ import math
 import numpy as np
 from services.db import get_db
 
+
 def _safe_sum(df, col):
     if df is None or df.empty or col not in df.columns:
         return 0.0
@@ -78,6 +79,8 @@ def _prepare_inventory_grouped(inv: pd.DataFrame):
 
     if "source_date" in df.columns:
         df["date"] = pd.to_datetime(df["source_date"], errors="coerce")
+        # === 修复：过滤掉转换失败的日期 ===
+        df = df[df["date"].notna()]
     else:
         return pd.DataFrame(), None
 
@@ -223,7 +226,9 @@ def preload_all_data():
     category = pd.read_sql(category_sql, db)
 
     if not daily.empty:
-        daily["date"] = pd.to_datetime(daily["date"])
+        daily["date"] = pd.to_datetime(daily["date"], errors="coerce")
+        # === 修复：过滤掉转换失败的日期 ===
+        daily = daily[daily["date"].notna()]
         daily = daily.sort_values("date")
 
         # 移除缺失数据的日期 (8.18, 8.19, 8.20)
@@ -235,7 +240,9 @@ def preload_all_data():
         daily["6M_Avg_Rolling"] = daily["net_sales_with_tax"].rolling(window=180, min_periods=1, center=False).mean()
 
     if not category.empty:
-        category["date"] = pd.to_datetime(category["date"])
+        category["date"] = pd.to_datetime(category["date"], errors="coerce")
+        # === 修复：过滤掉转换失败的日期 ===
+        category = category[category["date"].notna()]
         category = category.sort_values(["Category", "date"])
 
         # 移除缺失数据的日期 - 所有分类都过滤
@@ -261,6 +268,23 @@ def preload_all_data():
 def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_sel, cats_sel,
                             custom_dates_selected=False, t1=None, t2=None):
     """快速准备图表数据 - 优化缓存稳定性"""
+
+    # === 添加验证信息 ===
+    print(f"=== DEBUG: Time Range Selection ===")
+    print(f"time_range: {time_range}")
+    print(f"custom_dates_selected: {custom_dates_selected}")
+    print(f"t1: {t1}, t2: {t2}")
+
+    # 检查 daily 数据是否存在且不为空
+    if daily is not None and not daily.empty and 'date' in daily.columns:
+        daily_dates = daily['date'].dropna()  # 过滤掉 NaT 值
+        if not daily_dates.empty:
+            print(f"daily data date range: {daily_dates.min()} to {daily_dates.max()}")
+        else:
+            print("daily data date range: No valid dates after filtering NaT")
+    else:
+        print("daily data date range: No date column or empty dataframe")
+
     # 稳定缓存键 - 对列表参数排序确保缓存键一致
     time_range = sorted(time_range) if time_range else []
     data_sel = sorted(data_sel) if data_sel else []
@@ -269,47 +293,103 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
     if not time_range or not data_sel or not cats_sel:
         return None
 
-    # 获取当前日期
-    today = pd.Timestamp.today().normalize()
-
-    # 计算时间范围筛选条件
-    start_of_week = today - pd.Timedelta(days=today.weekday())
-    start_of_month = today.replace(day=1)
-    start_of_year = today.replace(month=1, day=1)
-
     # 应用时间范围筛选到daily数据
     daily_filtered = daily.copy()
-    grouped_tx = category_tx.copy()
 
-    if "WTD" in time_range:
-        daily_filtered = daily_filtered[daily_filtered["date"] >= start_of_week]
-        grouped_tx = grouped_tx[grouped_tx["date"] >= start_of_week]
-    if "MTD" in time_range:
-        daily_filtered = daily_filtered[daily_filtered["date"] >= start_of_month]
-        grouped_tx = grouped_tx[grouped_tx["date"] >= start_of_month]
-    if "YTD" in time_range:
-        daily_filtered = daily_filtered[daily_filtered["date"] >= start_of_year]
-        grouped_tx = grouped_tx[grouped_tx["date"] >= start_of_year]
-    if custom_dates_selected and t1 and t2:
+    # === 修复：确保日期列是 datetime 类型并过滤 NaT ===
+    if 'date' in daily_filtered.columns:
+        daily_filtered['date'] = pd.to_datetime(daily_filtered['date'], errors='coerce')
+        daily_filtered = daily_filtered[daily_filtered['date'].notna()]  # 过滤掉 NaT 值
+
+    grouped_tx = category_tx.copy()
+    if 'date' in grouped_tx.columns:
+        grouped_tx['date'] = pd.to_datetime(grouped_tx['date'], errors='coerce')
+        grouped_tx = grouped_tx[grouped_tx['date'].notna()]  # 过滤掉 NaT 值
+
+    # === 修复：重新设计时间筛选逻辑 ===
+    # 如果选择了"Custom dates"，则只使用自定义日期范围，忽略其他时间范围
+    if "Custom dates" in time_range and t1 and t2:
+        print("=== DEBUG: Using CUSTOM DATE RANGE ===")
         t1_ts = pd.to_datetime(t1)
         t2_ts = pd.to_datetime(t2)
+
         daily_filtered = daily_filtered[
             (daily_filtered["date"] >= t1_ts) & (daily_filtered["date"] <= t2_ts)]
         grouped_tx = grouped_tx[
             (grouped_tx["date"] >= t1_ts) & (grouped_tx["date"] <= t2_ts)]
 
-    grouped_inv = inv_grouped.copy()
-    # 对库存数据应用相同的时间范围筛选
-    if not grouped_inv.empty:
+    else:
+        # 如果没有选择自定义日期，则使用其他时间范围选项
+        print("=== DEBUG: Using STANDARD TIME RANGES ===")
+        today = pd.Timestamp.today().normalize()
+
+        # 计算时间范围筛选条件
+        start_of_week = today - pd.Timedelta(days=today.weekday())
+        start_of_month = today.replace(day=1)
+        start_of_year = today.replace(month=1, day=1)
+
+        # 应用多个时间范围筛选（WTD、MTD、YTD可以同时选择）
+        date_filters = []
+
         if "WTD" in time_range:
-            grouped_inv = grouped_inv[grouped_inv["date"] >= start_of_week]
+            date_filters.append(daily_filtered["date"] >= start_of_week)
+            print("Applied WTD filter")
+
         if "MTD" in time_range:
-            grouped_inv = grouped_inv[grouped_inv["date"] >= start_of_month]
+            date_filters.append(daily_filtered["date"] >= start_of_month)
+            print("Applied MTD filter")
+
         if "YTD" in time_range:
-            grouped_inv = grouped_inv[grouped_inv["date"] >= start_of_year]
-        if custom_dates_selected and t1 and t2:
+            date_filters.append(daily_filtered["date"] >= start_of_year)
+            print("Applied YTD filter")
+
+        # 如果有多个时间范围筛选条件，使用 OR 逻辑合并
+        if date_filters:
+            combined_filter = date_filters[0]
+            for filter_condition in date_filters[1:]:
+                combined_filter = combined_filter | filter_condition
+
+            daily_filtered = daily_filtered[combined_filter]
+            grouped_tx = grouped_tx[combined_filter]
+
+    # === 添加过滤后的日期范围验证 ===
+    if daily_filtered is not None and not daily_filtered.empty and 'date' in daily_filtered.columns:
+        filtered_dates = daily_filtered['date'].dropna()
+        if not filtered_dates.empty:
+            print(f"daily_filtered date range: {filtered_dates.min()} to {filtered_dates.max()}")
+            print(f"daily_filtered dates count: {len(filtered_dates)}")
+            print(f"Sample dates: {sorted(filtered_dates.unique())[:5]}")  # 显示前5个日期
+        else:
+            print("daily_filtered date range: No valid dates after filtering")
+    else:
+        print("daily_filtered date range: No date column or empty dataframe after filtering")
+
+    # 对库存数据应用相同的时间范围筛选
+    grouped_inv = inv_grouped.copy()
+    if not grouped_inv.empty:
+        if "Custom dates" in time_range and t1 and t2:
             grouped_inv = grouped_inv[
                 (grouped_inv["date"] >= pd.to_datetime(t1)) & (grouped_inv["date"] <= pd.to_datetime(t2))]
+        else:
+            today = pd.Timestamp.today().normalize()
+            start_of_week = today - pd.Timedelta(days=today.weekday())
+            start_of_month = today.replace(day=1)
+            start_of_year = today.replace(month=1, day=1)
+
+            inv_filters = []
+
+            if "WTD" in time_range:
+                inv_filters.append(grouped_inv["date"] >= start_of_week)
+            if "MTD" in time_range:
+                inv_filters.append(grouped_inv["date"] >= start_of_month)
+            if "YTD" in time_range:
+                inv_filters.append(grouped_inv["date"] >= start_of_year)
+
+            if inv_filters:
+                combined_inv_filter = inv_filters[0]
+                for filter_condition in inv_filters[1:]:
+                    combined_inv_filter = combined_inv_filter | filter_condition
+                grouped_inv = grouped_inv[combined_inv_filter]
 
     # 定义bar分类（这5个分类使用 net_sales + tax 计算）
     bar_cats = {"Cafe Drinks", "Smoothie Bar", "Soups", "Sweet Treats", "Wraps & Salads", "Breakfast Bowls"}
@@ -352,9 +432,7 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
             bar_daily_agg = bar_tx.groupby("date").agg({
                 "net_sales": "sum",
                 "transactions": "sum",
-                "qty": "sum",
-                "3M_Avg_Rolling": "mean",
-                "6M_Avg_Rolling": "mean"
+                "qty": "sum"
             }).reset_index()
 
             # 同时把新列名统一为 net_sales_with_tax，以兼容下游绘图逻辑
@@ -366,11 +444,9 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
                 axis=1
             )
 
-            # 为bar数据计算准确的滚动平均（基于纯净净销售额）
-            bar_daily_agg["3M_Avg_Rolling"] = bar_daily_agg["net_sales"].rolling(window=90, min_periods=1,
-                                                                                 center=False).mean()
-            bar_daily_agg["6M_Avg_Rolling"] = bar_daily_agg["net_sales"].rolling(window=180, min_periods=1,
-                                                                                 center=False).mean()
+            # === 修复：只在选择了3M/6M Avg时才计算滚动平均 ===
+            bar_daily_agg["3M_Avg_Rolling"] = 0
+            bar_daily_agg["6M_Avg_Rolling"] = 0
 
             bar_daily_agg["Category"] = "bar"
             parts_tx.append(bar_daily_agg)
@@ -383,25 +459,19 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
             "net_sales_with_tax": "total_net_sales",
             "transactions": "total_transactions",
             "avg_txn": "total_avg_txn",
-            "qty": "total_qty",
-            "3M_Avg_Rolling": "total_3M_Avg",
-            "6M_Avg_Rolling": "total_6M_Avg"
+            "qty": "total_qty"
         })
 
         # 获取每日bar数据
         bar_daily = grouped_tx[grouped_tx["Category"].isin(bar_cats)].groupby("date").agg({
             "net_sales_with_tax": "sum",
             "transactions": "sum",
-            "qty": "sum",
-            "3M_Avg_Rolling": "mean",
-            "6M_Avg_Rolling": "mean"
+            "qty": "sum"
         }).reset_index()
         bar_daily = bar_daily.rename(columns={
             "net_sales_with_tax": "bar_net_sales",
             "transactions": "bar_transactions",
-            "qty": "bar_qty",
-            "3M_Avg_Rolling": "bar_3M_Avg",
-            "6M_Avg_Rolling": "bar_6M_Avg"
+            "qty": "bar_qty"
         })
 
         # 合并total和bar数据
@@ -412,11 +482,9 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
         retail_data["transactions"] = retail_data["total_transactions"] - retail_data["bar_transactions"].fillna(0)
         retail_data["qty"] = retail_data["total_qty"] - retail_data["bar_qty"].fillna(0)
 
-        # 计算retail的滚动平均值
-        retail_data["3M_Avg_Rolling"] = retail_data["net_sales_with_tax"].rolling(window=90, min_periods=1,
-                                                                                  center=False).mean()
-        retail_data["6M_Avg_Rolling"] = retail_data["net_sales_with_tax"].rolling(window=180, min_periods=1,
-                                                                                  center=False).mean()
+        # === 修复：只在选择了3M/6M Avg时才计算滚动平均 ===
+        retail_data["3M_Avg_Rolling"] = 0
+        retail_data["6M_Avg_Rolling"] = 0
 
         # 计算平均交易额
         retail_data["avg_txn"] = retail_data.apply(
@@ -451,8 +519,8 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
         # 为每个数据类型添加对应的3M和6M Avg
         "Daily Net Sales 3M Avg": "3M_Avg_Rolling",
         "Daily Net Sales 6M Avg": "6M_Avg_Rolling",
-        "Weekly Net Sales 3M Avg": "weekly_net_sales_3M_Avg",  # 新增这一行
-        "Weekly Net Sales 6M Avg": "weekly_net_sales_6M_Avg",  # 新增这一行
+        "Weekly Net Sales 3M Avg": "weekly_net_sales_3M_Avg",
+        "Weekly Net Sales 6M Avg": "weekly_net_sales_6M_Avg",
         "Daily Transactions 3M Avg": "transactions_3M_Avg",
         "Daily Transactions 6M Avg": "transactions_6M_Avg",
         "Avg Transaction 3M Avg": "avg_txn_3M_Avg",
@@ -461,31 +529,52 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
         "Items Sold 6M Avg": "qty_6M_Avg",
     }
 
-    # 为其他数据类型计算3M和6M滚动平均值
+    # === 修复：只在选择了3M/6M Avg时才计算滚动平均，并且基于筛选后的数据计算 ===
     if any("3M Avg" in data_type or "6M Avg" in data_type for data_type in data_sel):
-        # 为transactions计算滚动平均
-        df_plot["transactions_3M_Avg"] = df_plot.groupby("Category")["transactions"].transform(
-            lambda x: x.rolling(window=90, min_periods=1, center=False).mean()
-        )
-        df_plot["transactions_6M_Avg"] = df_plot.groupby("Category")["transactions"].transform(
-            lambda x: x.rolling(window=180, min_periods=1, center=False).mean()
-        )
+        print("=== DEBUG: Calculating rolling averages ===")
 
-        # 为avg_txn计算滚动平均
-        df_plot["avg_txn_3M_Avg"] = df_plot.groupby("Category")["avg_txn"].transform(
-            lambda x: x.rolling(window=90, min_periods=1, center=False).mean()
-        )
-        df_plot["avg_txn_6M_Avg"] = df_plot.groupby("Category")["avg_txn"].transform(
-            lambda x: x.rolling(window=180, min_periods=1, center=False).mean()
-        )
+        # 为每个分类计算基于筛选后数据的滚动平均值
+        for category in df_plot['Category'].unique():
+            cat_mask = df_plot['Category'] == category
 
-        # 为qty计算滚动平均
-        df_plot["qty_3M_Avg"] = df_plot.groupby("Category")["qty"].transform(
-            lambda x: x.rolling(window=90, min_periods=1, center=False).mean()
-        )
-        df_plot["qty_6M_Avg"] = df_plot.groupby("Category")["qty"].transform(
-            lambda x: x.rolling(window=180, min_periods=1, center=False).mean()
-        )
+            # 为当前分类的数据按日期排序
+            cat_data = df_plot[cat_mask].sort_values('date').copy()
+
+            if "Daily Net Sales 3M Avg" in data_sel or "Daily Net Sales 6M Avg" in data_sel:
+                # 使用筛选后的数据计算滚动平均
+                df_plot.loc[cat_mask, "3M_Avg_Rolling"] = cat_data["net_sales_with_tax"].rolling(
+                    window=min(90, len(cat_data)), min_periods=1, center=False
+                ).mean()
+                df_plot.loc[cat_mask, "6M_Avg_Rolling"] = cat_data["net_sales_with_tax"].rolling(
+                    window=min(180, len(cat_data)), min_periods=1, center=False
+                ).mean()
+
+            # 为transactions计算滚动平均
+            if "Daily Transactions 3M Avg" in data_sel or "Daily Transactions 6M Avg" in data_sel:
+                df_plot.loc[cat_mask, "transactions_3M_Avg"] = cat_data["transactions"].rolling(
+                    window=min(90, len(cat_data)), min_periods=1, center=False
+                ).mean()
+                df_plot.loc[cat_mask, "transactions_6M_Avg"] = cat_data["transactions"].rolling(
+                    window=min(180, len(cat_data)), min_periods=1, center=False
+                ).mean()
+
+            # 为avg_txn计算滚动平均
+            if "Avg Transaction 3M Avg" in data_sel or "Avg Transaction 6M Avg" in data_sel:
+                df_plot.loc[cat_mask, "avg_txn_3M_Avg"] = cat_data["avg_txn"].rolling(
+                    window=min(90, len(cat_data)), min_periods=1, center=False
+                ).mean()
+                df_plot.loc[cat_mask, "avg_txn_6M_Avg"] = cat_data["avg_txn"].rolling(
+                    window=min(180, len(cat_data)), min_periods=1, center=False
+                ).mean()
+
+            # 为qty计算滚动平均
+            if "Items Sold 3M Avg" in data_sel or "Items Sold 6M Avg" in data_sel:
+                df_plot.loc[cat_mask, "qty_3M_Avg"] = cat_data["qty"].rolling(
+                    window=min(90, len(cat_data)), min_periods=1, center=False
+                ).mean()
+                df_plot.loc[cat_mask, "qty_6M_Avg"] = cat_data["qty"].rolling(
+                    window=min(180, len(cat_data)), min_periods=1, center=False
+                ).mean()
 
     # 处理库存数据
     if any(data in ["Inventory Value", "Profit (Amount)"] for data in data_sel):
@@ -572,10 +661,10 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
 
                 # 计算周滚动平均值（13周和26周，对应3个月和6个月）
                 weekly_agg['weekly_net_sales_3M_Avg'] = weekly_agg['net_sales_with_tax'].rolling(
-                    window=13, min_periods=1, center=False
+                    window=min(13, len(weekly_agg)), min_periods=1, center=False
                 ).mean()
                 weekly_agg['weekly_net_sales_6M_Avg'] = weekly_agg['net_sales_with_tax'].rolling(
-                    window=26, min_periods=1, center=False
+                    window=min(26, len(weekly_agg)), min_periods=1, center=False
                 ).mean()
 
                 # 重命名列以匹配数据映射
@@ -668,7 +757,7 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
             temp_df = temp_df[temp_df["value"].notna()]
             if not temp_df.empty:
                 melted_dfs.append(temp_df)
-                
+
     if melted_dfs:
         combined_df = pd.concat(melted_dfs, ignore_index=True)
         combined_df["series"] = combined_df["Category"] + " - " + combined_df["data_type"]
@@ -683,7 +772,6 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
         return combined_df
 
     return None
-
 
 def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
     # === 全局样式：消除顶部标题间距 ===
@@ -751,7 +839,7 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
     col_time_range, col_date, _ = st.columns([1, 1, 5])
 
     # === 添加空白行确保水平对齐 ===
-    #st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
+    # st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
 
     st.markdown("""
     <style>
@@ -813,23 +901,37 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
         )
 
     with col_date:
-
         # 只有当选择Daily时才显示日期选择框
         if summary_time_range == "Daily":
-            available_dates = sorted(daily["date"].dt.date.unique(), reverse=True)
-            available_dates_formatted = [date.strftime('%d/%m/%Y') for date in available_dates]
+            # === 修复：过滤掉 NaT 值并确保日期有效 ===
+            available_dates = sorted([
+                date.date() for date in daily["date"].unique()
+                if pd.notna(date) and hasattr(date, 'date')  # 过滤掉 NaT 并确保有 date 方法
+            ], reverse=True)
 
-            date_width = 18
-            selectbox_width = date_width + 1
+            if available_dates:  # 确保有可用的日期
+                available_dates_formatted = [date.strftime('%d/%m/%Y') for date in available_dates]
 
+                date_width = 18
+                selectbox_width = date_width + 1
 
-            selected_date_formatted = st.selectbox("Choose date", available_dates_formatted)
+                selected_date_formatted = st.selectbox("Choose date", available_dates_formatted)
 
-            # 将选择的日期转换回日期对象
-            selected_date = pd.to_datetime(selected_date_formatted, format='%d/%m/%Y').date()
+                # 将选择的日期转换回日期对象
+                selected_date = pd.to_datetime(selected_date_formatted, format='%d/%m/%Y').date()
+            else:
+                # 如果没有可用日期，使用今天
+                selected_date = pd.Timestamp.today().date()
+                selected_date_formatted = selected_date.strftime('%d/%m/%Y')
+                st.warning("No valid dates available, using today's date")
         else:
             # 对于非Daily选项，设置一个默认日期（使用最新日期）
-            selected_date = daily["date"].max().date()
+            # === 修复：同样过滤掉 NaT ===
+            valid_dates = daily["date"].dropna()
+            if not valid_dates.empty:
+                selected_date = valid_dates.max().date()
+            else:
+                selected_date = pd.Timestamp.today().date()
             selected_date_formatted = selected_date.strftime('%d/%m/%Y')
 
     # === 自定义日期范围选择（仅当选择Custom dates时显示） ===
@@ -860,8 +962,6 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
                 format="DD/MM/YYYY"
             )
 
-    # === 根据时间范围筛选数据 ===
-    # === 根据时间范围筛选数据 ===
     def filter_data_by_time_range(data, time_range, selected_date, custom_dates_selected=False, t1=None, t2=None):
         """根据时间范围筛选数据"""
         if data.empty:
@@ -888,20 +988,24 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
             # 如果没有日期列，返回原始数据
             return data_filtered
 
-        if time_range == "WTD":
-            data_filtered = data_filtered[data_filtered[date_col] >= start_of_week]
-        elif time_range == "MTD":
-            data_filtered = data_filtered[data_filtered[date_col] >= start_of_month]
-        elif time_range == "YTD":
-            data_filtered = data_filtered[data_filtered[date_col] >= start_of_year]
-        elif time_range == "Daily":
-            data_filtered = data_filtered[data_filtered[date_col].dt.date == selected_date]
-        elif time_range == "Custom dates" and custom_dates_selected and t1 and t2:
+        # 确保日期列为 datetime 类型
+        data_filtered[date_col] = pd.to_datetime(data_filtered[date_col], errors="coerce")
+
+        # === 修复：优先处理 Custom dates ===
+        if custom_dates_selected and t1 and t2:
             t1_ts = pd.to_datetime(t1)
             t2_ts = pd.to_datetime(t2)
             data_filtered = data_filtered[
                 (data_filtered[date_col] >= t1_ts) & (data_filtered[date_col] <= t2_ts)
                 ]
+        elif "WTD" in time_range:
+            data_filtered = data_filtered[data_filtered[date_col] >= start_of_week]
+        elif "MTD" in time_range:
+            data_filtered = data_filtered[data_filtered[date_col] >= start_of_month]
+        elif "YTD" in time_range:
+            data_filtered = data_filtered[data_filtered[date_col] >= start_of_year]
+        elif "Daily" in time_range:
+            data_filtered = data_filtered[data_filtered[date_col].dt.date == selected_date]
 
         return data_filtered
 
@@ -941,6 +1045,7 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
         unique_customers = filtered_tx[['Card Brand', 'PAN Suffix']].drop_duplicates()
 
         return len(unique_customers)
+
     # === 计算bar和retail的特定日期数据 ===
     def calculate_bar_retail_data(category_tx, time_range, selected_date, daily_data, custom_dates_selected=False,
                                   t1=None, t2=None):
@@ -948,7 +1053,6 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
 
         # bar分类定义
         bar_cats = {"Cafe Drinks", "Smoothie Bar", "Soups", "Sweet Treats", "Wraps & Salads", "Breakfast Bowls"}
-
 
         # 根据时间范围筛选分类数据
         category_filtered = filter_data_by_time_range(
@@ -1042,7 +1146,8 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
     kpis_main = {
         "Daily Net Sales": proper_round(df_selected_date["net_sales_with_tax"].sum()),
         "Daily Transactions": df_selected_date["transactions"].sum(),
-        "# of Customers": calculate_customer_count(tx, summary_time_range, selected_date, summary_custom_dates_selected, summary_t1, summary_t2),
+        "# of Customers": calculate_customer_count(tx, summary_time_range, selected_date, summary_custom_dates_selected,
+                                                   summary_t1, summary_t2),
         "Avg Transaction": df_selected_date["avg_txn"].mean(),
         "3M Avg": proper_round(daily["3M_Avg_Rolling"].iloc[-1]),
         "6M Avg": proper_round(daily["6M_Avg_Rolling"].iloc[-1]),
@@ -1271,8 +1376,13 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
             submitted = st.form_submit_button("Apply", type="primary", use_container_width=True)
 
             if submitted:
-                # 更新 session state
                 st.session_state["hl_cats"] = cats_sel
+
+                # ✅ 修复 Custom dates 点击 Apply 后才生效的问题
+                if "Custom dates" in st.session_state.get("hl_time", []):
+                    st.session_state["hl_date_from"] = st.session_state.get("date_from")
+                    st.session_state["hl_date_to"] = st.session_state.get("date_to")
+
                 st.rerun()
 
         # 从 session state 获取最终的选择
@@ -1359,11 +1469,30 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
         has_valid_custom_dates = True
 
     # 实时计算图表数据 - 修改1：只有三个多选框都选择了才展示
+    # 实时计算图表数据 - 修改1：只有三个多选框都选择了才展示
     if has_time_range and has_data_sel and has_cats_sel and has_valid_custom_dates:
         with st.spinner("Generating chart..."):
+            # === 修复：正确传递自定义日期参数 ===
+            # 只有当选择了"Custom dates"并且有有效的自定义日期时才传递自定义日期参数
+            #custom_dates_active = ("Custom dates" in time_range) and has_valid_custom_dates
+            # === 修复首次选择 Custom dates 不生效的问题 ===
+            if "Custom dates" in time_range and (t1 is not None and t2 is not None):
+                custom_dates_active = True
+            else:
+                custom_dates_active = False
+
+            # ✅ 优先使用最新 session_state 中保存的 Custom Date
+            if custom_dates_active:
+                t1_final = st.session_state.get("hl_date_from", t1)
+                t2_final = st.session_state.get("hl_date_to", t2)
+            else:
+                t1_final, t2_final = t1, t2
+
             combined_df = prepare_chart_data_fast(
                 daily, category_tx, inv_grouped, time_range, data_sel, cats_sel,
-                custom_dates_selected, t1, t2
+                custom_dates_selected=custom_dates_active,
+                t1=t1_final,
+                t2=t2_final
             )
 
         if combined_df is not None and not combined_df.empty:
@@ -1422,9 +1551,9 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
 
             # === 修改：对表格中的 Daily Net Sales 和 Weekly Net Sales 也进行四舍五入取整 ===
             display_df.loc[display_df["data_type"].isin(["Daily Net Sales", "Weekly Net Sales"]), "value"] = \
-            display_df.loc[
-                display_df["data_type"].isin(["Daily Net Sales", "Weekly Net Sales"]), "value"
-            ].apply(lambda x: proper_round(x) if not pd.isna(x) else 0)
+                display_df.loc[
+                    display_df["data_type"].isin(["Daily Net Sales", "Weekly Net Sales"]), "value"
+                ].apply(lambda x: proper_round(x) if not pd.isna(x) else 0)
 
             display_df = display_df.rename(columns={
                 "date": "Date",
