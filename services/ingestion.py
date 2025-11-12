@@ -13,6 +13,11 @@ from services.db import get_db
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
+warnings.filterwarnings("ignore", category=pd.errors.DtypeWarning)
+
+
 FOLDER_ID = "1lZGE0DkgKyox1HbBzuhZ-oypDF478jBj"
 
 # ✅ 全局缓存 drive 实例
@@ -211,30 +216,27 @@ def _ensure_table_schema(conn, table: str, df: pd.DataFrame, prefer_real: set):
 
 
 def _deduplicate(df: pd.DataFrame, key_col: str, conn, table: str) -> pd.DataFrame:
-    """
-    默认仍旧按单列 key_col 去重；
-    但对 inventory 表，如果同时具备 source_date+SKU，则按 (source_date, SKU) 复合键去重。
-    """
     if df is None or df.empty:
         return df
 
-    # ✅ inventory：使用 (source_date, SKU) 去重，避免跨天误伤
     if table == "inventory" and "source_date" in df.columns and "SKU" in df.columns:
         try:
+            # 只与同一天的数据去重
             exist = pd.read_sql('SELECT source_date, SKU FROM "inventory"', conn)
-            # 统一成字符串键，避免 NaT/NaN 对比问题
             exist["source_date"] = pd.to_datetime(exist["source_date"], errors="coerce").dt.date.astype(str)
             exist["SKU"] = exist["SKU"].astype(str)
-            existed_keys = set((exist["source_date"] + "||" + exist["SKU"]).unique())
 
             df_local = df.copy()
             df_local["source_date"] = pd.to_datetime(df_local["source_date"], errors="coerce").dt.date.astype(str)
             df_local["SKU"] = df_local["SKU"].astype(str)
+
+            # ✅ 只与相同日期比对，而非所有日期
+            existed_keys = set((exist["source_date"] + "||" + exist["SKU"]).unique())
             keys = df_local["source_date"] + "||" + df_local["SKU"]
+
             mask = ~keys.isin(existed_keys)
             return df_local[mask]
         except Exception:
-            # 读库失败时，不做去重，尽量不中断导入
             return df
 
     # 其它表/场景：保持原单键去重逻辑
