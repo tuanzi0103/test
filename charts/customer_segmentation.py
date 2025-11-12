@@ -295,7 +295,7 @@ def show_customer_segmentation(tx, members):
                 yaxis_title="Predicted Transactions",
                 margin=dict(l=40, r=10, t=60, b=30)
             )
-            st.plotly_chart(fig_dow, width='content')
+            st.plotly_chart(fig_dow, config={"responsive": True})
 
     # 修改：使用分类而不是具体商品名称
     category_col = next((c for c in ["Category", "Item Category", "Product Category"] if c in df.columns), None)
@@ -310,7 +310,7 @@ def show_customer_segmentation(tx, members):
                 fig_categories = px.bar(top_categories, x=category_col, y=qty_col,
                                         title="Top Categories Prediction (Top 15)")
                 fig_categories.update_layout(width=400, height=400)  # 设置图表宽度和高度
-                st.plotly_chart(fig_categories, width='content')
+                st.plotly_chart(fig_categories, config={"responsive": True})
             else:
                 top_categories = df[category_col].value_counts().reset_index().rename(
                     columns={"index": "Category", category_col: "Count"}).head(15)
@@ -318,7 +318,7 @@ def show_customer_segmentation(tx, members):
                 fig_categories = px.bar(top_categories, x="Category", y="Count",
                                         title="Top Categories Prediction (Top 15)")
                 fig_categories.update_layout(width=400, height=400)  # 设置图表宽度和高度
-                st.plotly_chart(fig_categories, width='content')
+                st.plotly_chart(fig_categories, config={"responsive": True})
     else:
         # 如果没有分类列，使用商品名称但只显示大类（通过截取或分组）
         item_col = next((c for c in ["Item", "Item Name", "Variation Name", "SKU Name"] if c in df.columns), None)
@@ -335,14 +335,14 @@ def show_customer_segmentation(tx, members):
                     fig_categories = px.bar(top_categories, x='_category', y=qty_col,
                                             title="Top Categories Prediction (Top 15)")
                     fig_categories.update_layout(width=400, height=400)
-                    st.plotly_chart(fig_categories, width='content')
+                    st.plotly_chart(fig_categories, config={"responsive": True})
                 else:
                     top_categories = df_with_category['_category'].value_counts().reset_index().rename(
                         columns={"index": "Category", '_category': "Count"}).head(15)
                     fig_categories = px.bar(top_categories, x="Category", y="Count",
                                             title="Top Categories Prediction (Top 15)")
                     fig_categories.update_layout(width=400, height=400)
-                    st.plotly_chart(fig_categories, width='content')
+                    st.plotly_chart(fig_categories, config={"responsive": True})
 
     st.divider()
 
@@ -680,4 +680,4 @@ def show_customer_segmentation(tx, members):
         # === 修改：设置热力图宽度 ===
         fig_heatmap = px.imshow(pv, aspect="auto", title=f"Heatmap by {metric.title()} (Hour x Day)")
         fig_heatmap.update_layout(width=600)  # 设置图表宽度
-        st.plotly_chart(fig_heatmap, width='content')
+        st.plotly_chart(fig_heatmap, config={"responsive": True})

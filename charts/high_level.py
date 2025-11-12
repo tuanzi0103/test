@@ -70,7 +70,7 @@ def persisting_multiselect(label, options, key, default=None, width_chars=None):
 # === 预加载所有数据 ===
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+#@st.cache_data(ttl=600, show_spinner=False)
 def _prepare_inventory_grouped(inv: pd.DataFrame):
     if inv is None or inv.empty:
         return pd.DataFrame(), None
@@ -139,7 +139,7 @@ def _prepare_inventory_grouped(inv: pd.DataFrame):
 
 
 # === 预加载所有数据 ===
-@st.cache_data(ttl=600, show_spinner=False)
+#@st.cache_data(ttl=600, show_spinner=False)
 def preload_all_data():
     """预加载所有需要的数据"""
     db = get_db()
@@ -264,16 +264,10 @@ def preload_all_data():
     return daily, category
 
 
-@st.cache_data(ttl=300, max_entries=50, show_spinner=False)
+#@st.cache_data(ttl=300, max_entries=50, show_spinner=False)
 def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_sel, cats_sel,
                             custom_dates_selected=False, t1=None, t2=None):
     """快速准备图表数据 - 优化缓存稳定性"""
-
-    # === 添加验证信息 ===
-    print(f"=== DEBUG: Time Range Selection ===")
-    print(f"time_range: {time_range}")
-    print(f"custom_dates_selected: {custom_dates_selected}")
-    print(f"t1: {t1}, t2: {t2}")
 
     # 检查 daily 数据是否存在且不为空
     if daily is not None and not daily.empty and 'date' in daily.columns:

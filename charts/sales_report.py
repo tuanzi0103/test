@@ -686,7 +686,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
             fig1 = px.bar(g_top10_items, x="Category", y="items_sold", title="Items Sold (by Category) - Top 10",
                           height=400)
             fig1.update_layout(margin=dict(t=60, b=60))
-            st.plotly_chart(fig1, width='stretch')
+            st.plotly_chart(fig1, config={"responsive": True})
 
         with c2:
             # 只显示Top 10分类
@@ -694,7 +694,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
             fig2 = px.bar(g_sorted, x="Category", y="daily_sales", title="Daily Sales (by Category) - Top 10",
                           height=400)
             fig2.update_layout(margin=dict(t=60, b=60))
-            st.plotly_chart(fig2, width='stretch')
+            st.plotly_chart(fig2, config={"responsive": True})
     else:
         st.info("No data under current filters.")
         return
@@ -1151,7 +1151,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                         # ✅ 图表居中显示，宽度为页面一半
                         chart_col1, _ = st.columns([1, 1])
                         with chart_col1:
-                            st.plotly_chart(fig, width='stretch')
+                            st.plotly_chart(fig, config={"responsive": True})
                 else:
                     st.info("No data for selected items.")
         else:
@@ -1522,7 +1522,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                         # ✅ 图表居中显示，宽度为页面一半
                         chart_col1, _ = st.columns([1, 1])
                         with chart_col1:
-                            st.plotly_chart(fig, width='stretch')
+                            st.plotly_chart(fig, config={"responsive": True})
 
                 else:
                     st.info("No data for selected items.")
