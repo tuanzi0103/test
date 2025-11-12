@@ -5,6 +5,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="auto"
 )
+
+import warnings
+warnings.simplefilter("ignore")
+
 import os
 import pandas as pd
 from services.analytics import load_all
