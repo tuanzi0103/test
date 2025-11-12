@@ -338,7 +338,7 @@ def show_inventory(tx, inventory: pd.DataFrame):
         df_summary,
         column_config=column_config,
         hide_index=True,
-        use_container_width=False
+        width='content'
     )
 
     st.markdown("---")
@@ -678,7 +678,7 @@ def show_inventory(tx, inventory: pd.DataFrame):
             st.dataframe(
                 df_low_display[display_columns],
                 column_config=column_config,
-                use_container_width=False
+                width='content'
             )
         else:
             st.info("No matching items found with the current filters.")

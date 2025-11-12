@@ -286,7 +286,7 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
         print("daily data date range: No date column or empty dataframe")
 
     # 稳定缓存键 - 对列表参数排序确保缓存键一致
-    time_range = sorted(time_range) if time_range else []
+    time_range = list(dict.fromkeys(time_range))  # 去重但保持用户选择顺序
     data_sel = sorted(data_sel) if data_sel else []
     cats_sel = sorted(cats_sel) if cats_sel else []
 
@@ -306,6 +306,12 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
         grouped_tx['date'] = pd.to_datetime(grouped_tx['date'], errors='coerce')
         grouped_tx = grouped_tx[grouped_tx['date'].notna()]  # 过滤掉 NaT 值
 
+    # === 优化：统一定义时间边界 ===
+    today = pd.Timestamp.today().normalize()
+    start_of_week = today - pd.Timedelta(days=today.weekday())
+    start_of_month = today.replace(day=1)
+    start_of_year = today.replace(month=1, day=1)
+
     # === 修复：重新设计时间筛选逻辑 ===
     # 如果选择了"Custom dates"，则只使用自定义日期范围，忽略其他时间范围
     if "Custom dates" in time_range and t1 and t2:
@@ -318,29 +324,28 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
         grouped_tx = grouped_tx[
             (grouped_tx["date"] >= t1_ts) & (grouped_tx["date"] <= t2_ts)]
 
-    else:
+    elif any(x in time_range for x in ["WTD", "MTD", "YTD"]):
         # 如果没有选择自定义日期，则使用其他时间范围选项
         print("=== DEBUG: Using STANDARD TIME RANGES ===")
-        today = pd.Timestamp.today().normalize()
 
-        # 计算时间范围筛选条件
-        start_of_week = today - pd.Timedelta(days=today.weekday())
-        start_of_month = today.replace(day=1)
-        start_of_year = today.replace(month=1, day=1)
+        # === 修复：重置索引以避免布尔索引对齐问题 ===
+        daily_filtered = daily_filtered.reset_index(drop=True)
+        grouped_tx = grouped_tx.reset_index(drop=True)
 
         # 应用多个时间范围筛选（WTD、MTD、YTD可以同时选择）
         date_filters = []
 
         if "WTD" in time_range:
-            date_filters.append(daily_filtered["date"] >= start_of_week)
+            # 使用 .values 来避免索引对齐问题
+            date_filters.append(daily_filtered["date"].values >= start_of_week)
             print("Applied WTD filter")
 
         if "MTD" in time_range:
-            date_filters.append(daily_filtered["date"] >= start_of_month)
+            date_filters.append(daily_filtered["date"].values >= start_of_month)
             print("Applied MTD filter")
 
         if "YTD" in time_range:
-            date_filters.append(daily_filtered["date"] >= start_of_year)
+            date_filters.append(daily_filtered["date"].values >= start_of_year)
             print("Applied YTD filter")
 
         # 如果有多个时间范围筛选条件，使用 OR 逻辑合并
@@ -350,7 +355,22 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
                 combined_filter = combined_filter | filter_condition
 
             daily_filtered = daily_filtered[combined_filter]
-            grouped_tx = grouped_tx[combined_filter]
+
+            # ✅ 对 grouped_tx 单独计算过滤条件
+            if date_filters:
+                grouped_tx_filters = []
+                if "WTD" in time_range:
+                    grouped_tx_filters.append(grouped_tx["date"].values >= start_of_week)
+                if "MTD" in time_range:
+                    grouped_tx_filters.append(grouped_tx["date"].values >= start_of_month)
+                if "YTD" in time_range:
+                    grouped_tx_filters.append(grouped_tx["date"].values >= start_of_year)
+
+                if grouped_tx_filters:
+                    combined_tx_filter = grouped_tx_filters[0]
+                    for fcond in grouped_tx_filters[1:]:
+                        combined_tx_filter = combined_tx_filter | fcond
+                    grouped_tx = grouped_tx[combined_tx_filter]
 
     # === 添加过滤后的日期范围验证 ===
     if daily_filtered is not None and not daily_filtered.empty and 'date' in daily_filtered.columns:
@@ -364,18 +384,13 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
     else:
         print("daily_filtered date range: No date column or empty dataframe after filtering")
 
-    # 对库存数据应用相同的时间范围筛选
+    # === 优化：对库存数据应用相同的时间范围筛选 ===
     grouped_inv = inv_grouped.copy()
     if not grouped_inv.empty:
         if "Custom dates" in time_range and t1 and t2:
             grouped_inv = grouped_inv[
                 (grouped_inv["date"] >= pd.to_datetime(t1)) & (grouped_inv["date"] <= pd.to_datetime(t2))]
-        else:
-            today = pd.Timestamp.today().normalize()
-            start_of_week = today - pd.Timedelta(days=today.weekday())
-            start_of_month = today.replace(day=1)
-            start_of_year = today.replace(month=1, day=1)
-
+        elif any(x in time_range for x in ["WTD", "MTD", "YTD"]):
             inv_filters = []
 
             if "WTD" in time_range:
@@ -390,6 +405,17 @@ def prepare_chart_data_fast(daily, category_tx, inv_grouped, time_range, data_se
                 for filter_condition in inv_filters[1:]:
                     combined_inv_filter = combined_inv_filter | filter_condition
                 grouped_inv = grouped_inv[combined_inv_filter]
+
+    # === 修复：同步库存数据与销售数据的日期范围 ===
+    if not daily_filtered.empty and not grouped_inv.empty:
+        min_date, max_date = daily_filtered["date"].min(), daily_filtered["date"].max()
+        grouped_inv = grouped_inv[
+            (grouped_inv["date"] >= min_date) & (grouped_inv["date"] <= max_date)
+        ]
+
+    # === 修复：确保grouped_tx有Category列 ===
+    if "Category" not in grouped_tx.columns:
+        grouped_tx["Category"] = "Unknown"
 
     # 定义bar分类（这5个分类使用 net_sales + tax 计算）
     bar_cats = {"Cafe Drinks", "Smoothie Bar", "Soups", "Sweet Treats", "Wraps & Salads", "Breakfast Bowls"}
@@ -1296,7 +1322,7 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
         df_summary,
         column_config=column_config,
         hide_index=True,
-        use_container_width=False
+        width='content'
     )
 
     st.markdown("---")
@@ -1373,7 +1399,7 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
             )
 
             # 应用按钮
-            submitted = st.form_submit_button("Apply", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("Apply", type="primary", width='stretch')
 
             if submitted:
                 st.session_state["hl_cats"] = cats_sel
@@ -1516,7 +1542,14 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
                 height=600
             )
 
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(
+                fig,
+                config={
+                    "responsive": True,
+                    "displayModeBar": False
+                }
+            )
+
             st.markdown("""
             <style>
             div[data-testid="stExpander"] > div:first-child {
@@ -1638,7 +1671,7 @@ def show_high_level(tx: pd.DataFrame, mem: pd.DataFrame, inv: pd.DataFrame):
                 lambda x: proper_round(x) if not pd.isna(x) else 0
             )
 
-            st.dataframe(display_df, use_container_width=False, column_config=column_config)
+            st.dataframe(display_df, width='content', column_config=column_config)
 
         else:
             st.warning("No data available for the selected combination.")

@@ -686,7 +686,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
             fig1 = px.bar(g_top10_items, x="Category", y="items_sold", title="Items Sold (by Category) - Top 10",
                           height=400)
             fig1.update_layout(margin=dict(t=60, b=60))
-            st.plotly_chart(fig1, use_container_width=True)
+            st.plotly_chart(fig1, width='stretch')
 
         with c2:
             # 只显示Top 10分类
@@ -694,7 +694,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
             fig2 = px.bar(g_sorted, x="Category", y="daily_sales", title="Daily Sales (by Category) - Top 10",
                           height=400)
             fig2.update_layout(margin=dict(t=60, b=60))
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width='stretch')
     else:
         st.info("No data under current filters.")
         return
@@ -961,7 +961,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                        "Per day", "Comments", "Weekly change"]],
             column_config=bar_column_config,
             hide_index=True,
-            use_container_width=False
+            width='content'
         )
         # === 添加：减少两个表格之间的间距 ===
         st.markdown("""
@@ -980,7 +980,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                                "Per day", "Comments", "Weekly change"]],
             column_config=bar_column_config,
             hide_index=True,
-            use_container_width=False
+            width='content'
         )
 
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1015,7 +1015,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                     )
 
                     # 应用按钮
-                    submitted_bar = st.form_submit_button("Apply", type="primary", use_container_width=True)
+                    submitted_bar = st.form_submit_button("Apply", type="primary", width='stretch')
 
                     if submitted_bar:
                         # 更新 session state
@@ -1046,7 +1046,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                         'Sum of Daily Sales': st.column_config.Column(width="100px")
                     }
 
-                    st.dataframe(bar_item_summary, column_config=item_column_config, use_container_width=False)
+                    st.dataframe(bar_item_summary, column_config=item_column_config, width='content')
 
                     # 显示小计
                     total_qty = bar_item_summary["Sum of Items Sold"].sum()
@@ -1151,7 +1151,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                         # ✅ 图表居中显示，宽度为页面一半
                         chart_col1, _ = st.columns([1, 1])
                         with chart_col1:
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
                 else:
                     st.info("No data for selected items.")
         else:
@@ -1296,7 +1296,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                                   "Per day", "Comments", "Weekly change"]],
                 column_config=retail_column_config,
                 hide_index=True,
-                use_container_width=False
+                width='content'
             )
 
             # === 添加：减少两个表格之间的间距 ===
@@ -1315,7 +1315,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                                    "Per day", "Comments", "Weekly change"]],
                 column_config=retail_column_config,
                 hide_index=True,
-                use_container_width=False
+                width='content'
             )
 
             st.markdown("</div>", unsafe_allow_html=True)
@@ -1381,7 +1381,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                     )
 
                     # 应用按钮
-                    submitted_retail = st.form_submit_button("Apply", type="primary", use_container_width=True)
+                    submitted_retail = st.form_submit_button("Apply", type="primary", width='stretch')
 
                     if submitted_retail:
                         # 更新 session state
@@ -1417,7 +1417,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                         'Sum of Daily Sales': st.column_config.Column(width="100px")
                     }
 
-                    st.dataframe(retail_item_summary, column_config=item_column_config, use_container_width=False)
+                    st.dataframe(retail_item_summary, column_config=item_column_config, width='content')
 
                     # 显示小计
                     total_qty = retail_item_summary["Sum of Items Sold"].sum()
@@ -1522,7 +1522,7 @@ def show_sales_report(tx: pd.DataFrame, inv: pd.DataFrame):
                         # ✅ 图表居中显示，宽度为页面一半
                         chart_col1, _ = st.columns([1, 1])
                         with chart_col1:
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width='stretch')
 
                 else:
                     st.info("No data for selected items.")

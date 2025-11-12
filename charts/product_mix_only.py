@@ -286,7 +286,7 @@ def show_product_mix_only(tx: pd.DataFrame):
             "strategy": st.column_config.Column(width=160),
             "combo": st.column_config.Column(width=200)
         }
-        st.dataframe(sugg_df, column_config=suggestion_column_config, use_container_width=False)
+        st.dataframe(sugg_df, column_config=suggestion_column_config, width='content')
     else:
         st.info("No suggestions available based on current data.")
 
@@ -407,4 +407,4 @@ def show_product_mix_only(tx: pd.DataFrame):
         "Out of stock": st.column_config.Column(width=100)
     }
 
-    st.dataframe(out[show_cols], column_config=inventory_column_config, use_container_width=False)
+    st.dataframe(out[show_cols], column_config=inventory_column_config, width='content')

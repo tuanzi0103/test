@@ -260,7 +260,7 @@ def show_customer_segmentation(tx, members):
         df_summary,
         column_config=column_config,
         hide_index=True,
-        use_container_width=False
+        width='content'
     )
 
     st.divider()
@@ -295,7 +295,7 @@ def show_customer_segmentation(tx, members):
                 yaxis_title="Predicted Transactions",
                 margin=dict(l=40, r=10, t=60, b=30)
             )
-            st.plotly_chart(fig_dow, use_container_width=False)
+            st.plotly_chart(fig_dow, width='content')
 
     # 修改：使用分类而不是具体商品名称
     category_col = next((c for c in ["Category", "Item Category", "Product Category"] if c in df.columns), None)
@@ -310,7 +310,7 @@ def show_customer_segmentation(tx, members):
                 fig_categories = px.bar(top_categories, x=category_col, y=qty_col,
                                         title="Top Categories Prediction (Top 15)")
                 fig_categories.update_layout(width=400, height=400)  # 设置图表宽度和高度
-                st.plotly_chart(fig_categories, use_container_width=False)
+                st.plotly_chart(fig_categories, width='content')
             else:
                 top_categories = df[category_col].value_counts().reset_index().rename(
                     columns={"index": "Category", category_col: "Count"}).head(15)
@@ -318,7 +318,7 @@ def show_customer_segmentation(tx, members):
                 fig_categories = px.bar(top_categories, x="Category", y="Count",
                                         title="Top Categories Prediction (Top 15)")
                 fig_categories.update_layout(width=400, height=400)  # 设置图表宽度和高度
-                st.plotly_chart(fig_categories, use_container_width=False)
+                st.plotly_chart(fig_categories, width='content')
     else:
         # 如果没有分类列，使用商品名称但只显示大类（通过截取或分组）
         item_col = next((c for c in ["Item", "Item Name", "Variation Name", "SKU Name"] if c in df.columns), None)
@@ -335,14 +335,14 @@ def show_customer_segmentation(tx, members):
                     fig_categories = px.bar(top_categories, x='_category', y=qty_col,
                                             title="Top Categories Prediction (Top 15)")
                     fig_categories.update_layout(width=400, height=400)
-                    st.plotly_chart(fig_categories, use_container_width=False)
+                    st.plotly_chart(fig_categories, width='content')
                 else:
                     top_categories = df_with_category['_category'].value_counts().reset_index().rename(
                         columns={"index": "Category", '_category': "Count"}).head(15)
                     fig_categories = px.bar(top_categories, x="Category", y="Count",
                                             title="Top Categories Prediction (Top 15)")
                     fig_categories.update_layout(width=400, height=400)
-                    st.plotly_chart(fig_categories, use_container_width=False)
+                    st.plotly_chart(fig_categories, width='content')
 
     st.divider()
 
@@ -481,7 +481,7 @@ def show_customer_segmentation(tx, members):
                 churn_tag_final[["Customer Name", "Customer ID", "Phone",
                                  "Average Visit", "Last Month Visit"]],
                 column_config=column_config,
-                use_container_width=False
+                width='content'
             )
         else:
             st.info("No regular customers found who didn't visit in the last month.")
@@ -528,7 +528,7 @@ def show_customer_segmentation(tx, members):
             )
 
             # 应用按钮
-            submitted = st.form_submit_button("Apply", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("Apply", type="primary", width='stretch')
 
             if submitted:
                 # 更新 session state
@@ -578,7 +578,7 @@ def show_customer_segmentation(tx, members):
         st.dataframe(
             chosen[existing_cols],
             column_config=column_config,
-            use_container_width=False,  # ✅ 关闭容器自适应，列宽才生效
+            width='content',  # ✅ 关闭容器自适应，列宽才生效
             hide_index=True
         )
 
@@ -607,7 +607,7 @@ def show_customer_segmentation(tx, members):
                 display_df = top5[["Customer Name", item_col_display, qty_col]].rename(
                     columns={item_col_display: "Item"}
                 )
-                st.dataframe(display_df, column_config=column_config, use_container_width=False)
+                st.dataframe(display_df, column_config=column_config, width='content')
 
             else:
                 # 如果没有分类列，使用商品名称但显示为分类
@@ -638,7 +638,7 @@ def show_customer_segmentation(tx, members):
                     display_df = top5[["Customer Name", "_category", qty_col]].rename(
                         columns={"_category": "Item"}
                     )
-                    st.dataframe(display_df, column_config=column_config, use_container_width=False)
+                    st.dataframe(display_df, column_config=column_config, width='content')
     st.divider()
 
     # [5] Heatmap 可切换
@@ -680,4 +680,4 @@ def show_customer_segmentation(tx, members):
         # === 修改：设置热力图宽度 ===
         fig_heatmap = px.imshow(pv, aspect="auto", title=f"Heatmap by {metric.title()} (Hour x Day)")
         fig_heatmap.update_layout(width=600)  # 设置图表宽度
-        st.plotly_chart(fig_heatmap, use_container_width=False)
+        st.plotly_chart(fig_heatmap, width='content')
