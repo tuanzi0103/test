@@ -27,14 +27,29 @@ import platform
 import numpy as np
 from datetime import datetime, timedelta
 
+import psutil
+
+def check_memory():
+    mem = psutil.virtual_memory()
+    used_gb = mem.used / (1024 ** 3)
+    total_gb = mem.total / (1024 ** 3)
+    usage_ratio = used_gb / total_gb
+
+    if usage_ratio > 0.85:
+        st.warning(f"⚠️ Memory usage high ({usage_ratio*100:.1f}%). Please refresh occasionally.")
+
+
+
 # 关闭文件监控，避免 Streamlit Cloud 报 inotify 错误
 os.environ["WATCHDOG_DISABLE_FILE_WATCH"] = "true"
 
 # ✅ 确保 SQLite 文件和表结构存在
 init_db()  # 必须先初始化数据库表结构
 
-# ✅ 如果是空库 → 从 Google Drive 导入（现在表已经存在）
-init_db_from_drive_once()
+if "drive_initialized" not in st.session_state:
+    init_db_from_drive_once()
+    st.session_state.drive_initialized = True
+
 
 st.markdown("<h1 style='font-size:26px; font-weight:700;'>📊 Vie Manly Dashboard</h1>", unsafe_allow_html=True)
 
@@ -90,7 +105,10 @@ def check_missing_data(tx, inv):
 
 
 # === 数据加载 ===
-tx, mem, inv = load_db_cached()
+if "db_cache" not in st.session_state:
+    st.session_state.db_cache = load_db_cached()
+tx, mem, inv = st.session_state.db_cache
+
 
 # === Sidebar ===
 st.sidebar.header("⚙️ Settings")
@@ -164,7 +182,9 @@ if uploaded_files:
         st.sidebar.success("✅ Files ingested & uploaded to Google Drive.")
         # 清理缓存 → 重新加载数据库
         load_db_cached.clear()
-        tx, mem, inv = load_db_cached()
+        st.session_state.db_cache = load_db_cached()
+        tx, mem, inv = st.session_state.db_cache
+
         # 设置刷新标志防止死循环
         if "reloaded" not in st.session_state:
             st.session_state["reloaded"] = True
@@ -186,6 +206,8 @@ if st.sidebar.button("🗑️ Clear Database"):
     st.session_state.uploaded_file_names = set()
     st.sidebar.success("✅ Database cleared!")
     load_db_cached.clear()
+    st.session_state.db_cache = load_db_cached()
+    tx, mem, inv = st.session_state.db_cache
     st.rerun()
 
 # === 重启应用按钮 ===
@@ -205,7 +227,8 @@ if st.sidebar.button("🔄 Restart & Reload App"):
 
         # 4. 重新加载数据
         load_db_cached.clear()
-        tx, mem, inv = load_db_cached()
+        st.session_state.db_cache = load_db_cached()
+        tx, mem, inv = st.session_state.db_cache
 
         st.sidebar.success("✅ App restarted with latest data!")
         st.rerun()
