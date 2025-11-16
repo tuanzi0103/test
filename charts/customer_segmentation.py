@@ -414,7 +414,8 @@ def show_customer_segmentation(tx, members):
         # ======================
         # NEW VERSION: Regular Churn with Month Selector + Top N selector
         # ======================
-        st.markdown("### 📅 Regular Customer Churn (Last N Months)")
+        st.markdown("<h3 style='font-size:20px; font-weight:700;'>📊 Customer Behavior Predictions</h3>",
+                    unsafe_allow_html=True)
 
         # === New integer-only inputs, same behavior as Inventory Current Quantity ===
         col_l, col_r, _ = st.columns([1.0, 1.0, 5.0])
