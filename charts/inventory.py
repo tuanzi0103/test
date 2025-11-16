@@ -253,6 +253,19 @@ def show_inventory(tx, inventory: pd.DataFrame):
         st.info("No inventory data available")
         return
 
+    # === 新增：统一处理带星号的 item 名称 ===
+    tx = tx.copy()
+    if "Item" in tx.columns:
+        # 移除 Item 列开头的星号
+        tx["Item"] = tx["Item"].astype(str).str.replace(r'^\*', '', regex=True).str.strip()
+
+    # 同样处理其他可能的 item 相关列
+    if "Item Name" in tx.columns:
+        tx["Item Name"] = tx["Item Name"].astype(str).str.replace(r'^\*', '', regex=True).str.strip()
+
+    if "Price Point Name" in tx.columns:
+        tx["Price Point Name"] = tx["Price Point Name"].astype(str).str.replace(r'^\*', '', regex=True).str.strip()
+
     inv = inventory.copy()
 
     # ---- 💰 Inventory Valuation Analysis ----
@@ -472,13 +485,28 @@ def show_inventory(tx, inventory: pd.DataFrame):
             # 应用阈值筛选：同时应用 ≤ 和 ≥ 条件
             current_qty_numeric = pd.to_numeric(df_low_display[qty_col], errors="coerce").fillna(0)
 
-            # 应用 ≤ 条件
-            if threshold_low_value > 0:
-                df_low_display = df_low_display[current_qty_numeric <= threshold_low_value]
+            # ==== Default 开关 ====
+            no_qty_filter = st.checkbox(
+                "Show ALL Items (Ignore Current Quantity Filters)",
+                key="no_qty_filter",
+            )
 
-            # 应用 ≥ 条件
-            if threshold_high_value > 0:
-                df_low_display = df_low_display[current_qty_numeric >= threshold_high_value]
+            # 数字化库存
+            current_qty_numeric = pd.to_numeric(df_low_display[qty_col], errors="coerce").fillna(0)
+
+            # ==== 修改后的过滤逻辑 ====
+            # 如果用户没有勾选 default → 才执行库存过滤
+            if not no_qty_filter:
+
+                # ≤ 条件
+                if threshold_low_value > 0:
+                    df_low_display = df_low_display[current_qty_numeric <= threshold_low_value]
+
+                # ≥ 条件
+                if threshold_high_value > 0:
+                    df_low_display = df_low_display[current_qty_numeric >= threshold_high_value]
+
+            # 如果 no_qty_filter=True → 自动跳过过滤（不执行任何限制）
 
             # 确保数值列是数字类型
             df_low_display["Current Quantity Vie Market & Bar"] = pd.to_numeric(
@@ -535,6 +563,8 @@ def show_inventory(tx, inventory: pd.DataFrame):
             recent_tx = tx[(tx["Datetime"] >= past_4w_start) & (tx["Datetime"] <= selected_date_ts)].copy()
 
             recent_tx["Item"] = recent_tx["Item"].astype(str).str.strip()
+            # 移除 Item 列开头的星号（确保与前面处理一致）
+            recent_tx["Item"] = recent_tx["Item"].str.replace(r'^\*', '', regex=True).str.strip()
             recent_tx["Price Point Name"] = recent_tx["Price Point Name"].astype(str).str.strip()
             recent_tx["Net Sales"] = pd.to_numeric(recent_tx["Net Sales"], errors="coerce").fillna(0)
 
@@ -555,6 +585,7 @@ def show_inventory(tx, inventory: pd.DataFrame):
             tx_3m = tx[(tx["Datetime"] >= past_3m_start) & (tx["Datetime"] <= selected_date_ts)].copy()
             tx_3m["Net Sales"] = pd.to_numeric(tx_3m["Net Sales"], errors="coerce").fillna(0)
             tx_3m["Item"] = tx_3m["Item"].astype(str).str.strip()
+            tx_3m["Item"] = tx_3m["Item"].str.replace(r'^\*', '', regex=True).str.strip()
             tx_3m["Price Point Name"] = tx_3m["Price Point Name"].astype(str).str.strip()
             item_sales_3m = (
                 tx_3m.groupby(["Item", "Price Point Name"])["Net Sales"]
@@ -568,6 +599,7 @@ def show_inventory(tx, inventory: pd.DataFrame):
             tx_6m = tx[(tx["Datetime"] >= past_6m_start) & (tx["Datetime"] <= selected_date_ts)].copy()
             tx_6m["Net Sales"] = pd.to_numeric(tx_6m["Net Sales"], errors="coerce").fillna(0)
             tx_6m["Item"] = tx_6m["Item"].astype(str).str.strip()
+            tx_6m["Item"] = tx_6m["Item"].str.replace(r'^\*', '', regex=True).str.strip()
             tx_6m["Price Point Name"] = tx_6m["Price Point Name"].astype(str).str.strip()
             item_sales_6m = (
                 tx_6m.groupby(["Item", "Price Point Name"])["Net Sales"]

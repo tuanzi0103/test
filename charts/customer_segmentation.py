@@ -114,6 +114,7 @@ def persisting_multiselect(label, options, key, default=None, width_chars=None, 
     else:
         return st.multiselect(label, options, default=default_values, key=key)
 
+
 def is_phone_number(name):
     """
     判断字符串是否为手机号（包含数字和特定字符）
@@ -410,81 +411,117 @@ def show_customer_segmentation(tx, members):
             regular_customers = pd.DataFrame(columns=["Customer Name", "Average Visit"])
             st.warning("No data found in Period 1. This might be because the data only started recently.")
 
-        # 获取第二个期间的客户
-        if not period2_data.empty:
-            period2_customers = period2_data["Customer Name"].drop_duplicates().tolist()
+        # ======================
+        # NEW VERSION: Regular Churn with Month Selector + Top N selector
+        # ======================
+        st.markdown("### 📅 Regular Customer Churn (Last N Months)")
 
-        else:
-            period2_customers = []
-            st.warning("No data found in Period 2.")
+        # === New integer-only inputs, same behavior as Inventory Current Quantity ===
+        col_l, col_r, _ = st.columns([1.0, 1.0, 5.0])
 
-        # 找出流失客户：在第一个期间是常客，但在第二个期间没有出现
-        if not regular_customers.empty and period2_customers:
-            # 找出在第二个期间没有出现的常客
-            lost_customers = regular_customers[~regular_customers["Customer Name"].isin(period2_customers)].copy()
-
-            # 添加 Last Month Visit 列（都为0，因为他们在第二个期间没出现）
-            lost_customers["Last Month Visit"] = 0
-
-            # 排序并取前20
-            churn_tag_final = lost_customers.sort_values("Average Visit", ascending=False).head(20)
-        else:
-            churn_tag_final = pd.DataFrame(columns=["Customer Name", "Average Visit", "Last Month Visit"])
-            if regular_customers.empty:
-                st.info("No regular customers found in historical data.")
+        with col_l:
+            months_raw = st.text_input(
+                "Select last months",
+                value="1",
+                key="churn_months_input",
+                help="Please enter an integer"
+            )
+            # integer check
+            if not months_raw.isdigit():
+                st.warning("Please enter an integer")
+                months = 1
             else:
-                st.info("No period 2 data to compare against.")
+                months = int(months_raw)
+                months = max(1, min(months, 12))  # limit 1–12
 
-        # 映射 Customer ID 和手机号
+        with col_r:
+            top_n_raw = st.text_input(
+                "Show Top N users",
+                value="20",
+                key="churn_topn_input",
+                help="Please enter an integer"
+            )
+            if not top_n_raw.isdigit():
+                st.warning("Please enter an integer")
+                top_n = 20
+            else:
+                top_n = int(top_n_raw)
+                top_n = max(1, min(top_n, 200))  # Limit 1–200
+
+        # ---- Compute date ranges ----
+        today = pd.Timestamp.today().normalize()
+        period2_start = today - pd.DateOffset(months=int(months))
+        period2_end = today
+
+        # period2 = 最近 N 个月的来访客户
+        period2_data = df[
+            (df["Datetime"] >= period2_start) &
+            (df["Datetime"] <= period2_end)
+            ].copy()
+
+        period2_customers = period2_data["Customer Name"].dropna().unique().tolist()
+
+        # ---- Lost regulars: appear in regular_customers but NOT in period2 ----
+        if not regular_customers.empty:
+            churn_candidates = regular_customers[
+                ~regular_customers["Customer Name"].isin(period2_customers)
+            ].copy()
+
+            churn_candidates["Last Visit (months)"] = int(months)
+
+            churn_tag_final = (
+                churn_candidates.sort_values("Average Visit", ascending=False)
+                .head(int(top_n))
+            )
+        else:
+            churn_tag_final = pd.DataFrame(columns=["Customer Name", "Average Visit", "Last Visit (months)"])
+
+        # ---- Add Customer ID + Phone ----
         if not churn_tag_final.empty:
-            # 获取 Customer ID 映射
             if "Customer ID" in df.columns:
-                id_mapping = df[["Customer Name", "Customer ID"]].drop_duplicates().dropna()
+                id_mapping = df[["Customer Name", "Customer ID"]].drop_duplicates()
                 churn_tag_final = churn_tag_final.merge(id_mapping, on="Customer Name", how="left")
             else:
                 churn_tag_final["Customer ID"] = ""
 
-            # 映射手机号
-            if "Square Customer ID" in members.columns and "Customer ID" in churn_tag_final.columns:
-                phones_map = (
+            # phone
+            if "Square Customer ID" in members.columns:
+                phone_map = (
                     members.rename(columns={"Square Customer ID": "Customer ID", "Phone Number": "Phone"})
                     [["Customer ID", "Phone"]]
                     .dropna(subset=["Customer ID"])
                     .drop_duplicates("Customer ID")
                 )
-                phones_map["Customer ID"] = phones_map["Customer ID"].astype(str)
-                phones_map["Phone"] = phones_map["Phone"].apply(format_phone_number)
-
-                if "Customer ID" in churn_tag_final.columns:
-                    churn_tag_final["Customer ID"] = churn_tag_final["Customer ID"].astype(str)
-                    churn_tag_final = churn_tag_final.merge(phones_map, on="Customer ID", how="left")
-                else:
-                    churn_tag_final["Phone"] = ""
+                churn_tag_final = churn_tag_final.merge(phone_map, on="Customer ID", how="left")
             else:
                 churn_tag_final["Phone"] = ""
 
-        st.markdown("<h3 style='font-size:20px; font-weight:700;'>Top 20 Regulars who didn't come last month</h3>",
-                    unsafe_allow_html=True)
+        # ---- Display ----
+        st.markdown(
+            f"<h3 style='font-size:20px; font-weight:700;'>Top {int(top_n)} Regulars who didn't come in the last {int(months)} month(s)</h3>",
+            unsafe_allow_html=True
+        )
 
-        # 显示结果
-        if not churn_tag_final.empty:
-            # === 设置表格列宽配置 ===
+        if churn_tag_final.empty:
+            st.info("No customers found.")
+        else:
+            # 设置表格列宽配置
             column_config = {
                 'Customer Name': st.column_config.Column(width=105),
                 'Customer ID': st.column_config.Column(width=100),
                 'Phone': st.column_config.Column(width=90),
                 'Average Visit': st.column_config.Column(width=90),
-                'Last Month Visit': st.column_config.Column(width=110),
+                'Last Visit (months)': st.column_config.Column(width=110),
             }
 
             st.dataframe(
-                churn_tag_final[["Customer Name", "Customer ID", "Phone",
-                                 "Average Visit", "Last Month Visit"]],
+                churn_tag_final[
+                    ["Customer Name", "Customer ID", "Phone", "Average Visit", "Last Visit (months)"]
+                ],
                 column_config=column_config,
-                width='content'
+                width='content',
+                hide_index=True
             )
-        else:
-            st.info("No regular customers found who didn't visit in the last month.")
 
     st.divider()
 
