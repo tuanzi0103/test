@@ -25,13 +25,19 @@ _drive_instance = None
 
 
 def get_drive():
+    """
+    自动处理 Google 登录认证。
+    - 第一次运行：弹出 Google 登录窗口
+    - 认证过期：自动删除旧文件并重新认证
+    - 用户无需手动删除 credentials
+    """
     global _drive_instance
     if _drive_instance is not None:
         return _drive_instance
 
     gauth = GoogleAuth()
 
-    # ✅ 设置 OAuth 为 offline，确保 refresh_token 存下来
+    # 设置 OAuth 范围和刷新选项
     gauth.settings['oauth_scope'] = [
         "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/drive.file",
@@ -40,20 +46,39 @@ def get_drive():
     gauth.settings['get_refresh_token'] = True
 
     token_path = "credentials.json"
+
+    # === Step 1: 如果有旧认证，尝试加载 ===
     if os.path.exists(token_path):
-        gauth.LoadCredentialsFile(token_path)
+        try:
+            gauth.LoadCredentialsFile(token_path)
+        except Exception:
+            # 文件损坏时删除
+            os.remove(token_path)
+            gauth.credentials = None
 
+    # === Step 2: 如果没有凭证或凭证过期，重新认证 ===
     if gauth.credentials is None:
-        # 第一次认证：加 offline
-        gauth.LocalWebserverAuth()  # 这里会弹浏览器
-    elif gauth.access_token_expired:
-        gauth.Refresh()
+        try:
+            gauth.LocalWebserverAuth()  # 自动弹出浏览器登录
+        except Exception as e:
+            st.sidebar.error(f"❌ Google authentication failed: {e}")
     else:
-        gauth.Authorize()
+        try:
+            if gauth.access_token_expired:
+                gauth.Refresh()
+            else:
+                gauth.Authorize()
+        except Exception:
+            # 刷新失败时自动删除旧认证重新登录
+            if os.path.exists(token_path):
+                os.remove(token_path)
+            gauth.LocalWebserverAuth()
 
+    # === Step 3: 保存最新凭证 ===
     gauth.SaveCredentialsFile(token_path)
     _drive_instance = GoogleDrive(gauth)
     return _drive_instance
+
 
 
 def upload_file_to_drive(local_path: str, remote_name: str):
@@ -135,6 +160,15 @@ def preprocess_transactions(df: pd.DataFrame) -> pd.DataFrame:
             .str.replace(r"\.0$", "", regex=True)  # 去掉浮点形式的".0"
             .str.strip()
         )
+    # === NEW: Clean item names / remove leading '*' ===
+    for col in ["Item", "Item Name", "Price Point Name"]:
+        if col in df.columns:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(r'^\*+', '', regex=True)  # remove one or more leading *
+                .str.strip()
+            )
 
     return df
 
@@ -147,6 +181,16 @@ def preprocess_inventory(df: pd.DataFrame, filename: str = None) -> pd.DataFrame
         df.columns = df.iloc[0]
         df = df[1:].reset_index(drop=True)
         df = _fix_header(df)  # 再次处理可能的多行表头
+
+    # === NEW: Clean leading '*' from Item/Variation columns ===
+    for col in ["Item", "Item Name", "Variation Name", "SKU"]:
+        if col in df.columns:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(r'^\*+', '', regex=True)  # 去掉开头的所有星号
+                .str.strip()
+            )
 
     required = [
         "Tax - GST (10%)", "Price", "Current Quantity Vie Market & Bar",
